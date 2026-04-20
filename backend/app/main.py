@@ -13,6 +13,18 @@ Then visit:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.database import engine, Base
+from app import models  # noqa: F401  -- import needed so Base knows about the models
+from app.routers import transcriptions
+
+# -----------------------------------------------------------------------------
+# Create database tables on startup.
+# This scans every class that inherits from Base and runs CREATE TABLE
+# for any table that doesn't exist yet. Existing tables are left alone.
+# On first run this will create the voicepolish.db file in the backend/ folder.
+# -----------------------------------------------------------------------------
+Base.metadata.create_all(bind=engine)
+
 # -----------------------------------------------------------------------------
 # Create the FastAPI application instance.
 # `title` and `version` show up in the auto-generated /docs page.
@@ -61,3 +73,13 @@ def root():
         "docs": "/docs",
         "health": "/health",
     }
+
+
+# -----------------------------------------------------------------------------
+# Mount routers
+# -----------------------------------------------------------------------------
+# Each router is a self-contained group of routes in its own file.
+# include_router() registers them all under the main app. The prefix was set
+# on the router itself, so nothing to add here.
+# -----------------------------------------------------------------------------
+app.include_router(transcriptions.router)
