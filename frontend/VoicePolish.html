@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>VoicePolish — Speech to Refined Text</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;1,9..144,300&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #0d0d0f;
+    --surface: #151518;
+    --surface2: #1c1c21;
+    --border: #2a2a32;
+    --border-soft: #1f1f26;
+    --text: #e8e8f0;
+    --text-dim: #6b6b7e;
+    --text-muted: #3a3a48;
+    --accent: #7c6af7;
+    --accent-dim: #4a3fa0;
+    --accent-glow: rgba(124, 106, 247, 0.15);
+    --green: #4ade80;
+    --green-dim: rgba(74, 222, 128, 0.1);
+    --red: #f87171;
+    --amber: #fbbf24;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Ambient background */
+  body::before {
+    content: '';
+    position: fixed;
+    top: -30%;
+    left: -20%;
+    width: 60%;
+    height: 60%;
+    background: radial-gradient(ellipse, rgba(124,106,247,0.06) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    bottom: -20%;
+    right: -10%;
+    width: 50%;
+    height: 50%;
+    background: radial-gradient(ellipse, rgba(74,222,128,0.04) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .app {
+    position: relative;
+    z-index: 1;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 48px;
+  }
+
+  .logo {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .logo-title {
+    font-family: 'Fraunces', serif;
+    font-size: 28px;
+    font-weight: 300;
+    font-style: italic;
+    letter-spacing: -0.5px;
+    color: var(--text);
+    line-height: 1;
+  }
+
+  .logo-sub {
+    font-size: 10px;
+    font-weight: 300;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  .header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .btn-ghost {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 7px 14px;
+    border-radius: var(--radius-sm);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.05em;
+  }
+
+  .btn-ghost:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* Main record section */
+  .record-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    margin-bottom: 16px;
+  }
+
+  .record-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+
+  .record-label {
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .status-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: all 0.3s;
+  }
+
+  .status-dot.recording {
+    background: var(--red);
+    box-shadow: 0 0 8px var(--red);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+
+  .status-dot.ready {
+    background: var(--green);
+    box-shadow: 0 0 6px var(--green);
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.6; transform: scale(0.85); }
+  }
+
+  /* Transcript area */
+  .transcript-area {
+    min-height: 160px;
+    background: var(--surface2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    padding: 18px 20px;
+    margin-bottom: 24px;
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--text);
+    font-family: 'Fraunces', serif;
+    font-weight: 300;
+    position: relative;
+    transition: border-color 0.3s;
+  }
+
+  .transcript-area.active {
+    border-color: rgba(248, 113, 113, 0.3);
+  }
+
+  .transcript-area .placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 14px;
+    position: absolute;
+    top: 18px;
+    left: 20px;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .transcript-area .interim {
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
+  /* Waveform visualizer */
+  .waveform {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    height: 36px;
+    margin-bottom: 24px;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .waveform.active { opacity: 1; }
+
+  .wave-bar {
+    width: 3px;
+    border-radius: 2px;
+    background: var(--red);
+    animation: wave 0.8s ease-in-out infinite;
+    opacity: 0.8;
+  }
+
+  .wave-bar:nth-child(1)  { height: 8px;  animation-delay: 0s; }
+  .wave-bar:nth-child(2)  { height: 18px; animation-delay: 0.1s; }
+  .wave-bar:nth-child(3)  { height: 28px; animation-delay: 0.2s; }
+  .wave-bar:nth-child(4)  { height: 22px; animation-delay: 0.15s; }
+  .wave-bar:nth-child(5)  { height: 34px; animation-delay: 0.05s; }
+  .wave-bar:nth-child(6)  { height: 26px; animation-delay: 0.25s; }
+  .wave-bar:nth-child(7)  { height: 32px; animation-delay: 0.1s; }
+  .wave-bar:nth-child(8)  { height: 20px; animation-delay: 0.2s; }
+  .wave-bar:nth-child(9)  { height: 28px; animation-delay: 0.05s; }
+  .wave-bar:nth-child(10) { height: 16px; animation-delay: 0.15s; }
+  .wave-bar:nth-child(11) { height: 24px; animation-delay: 0.3s; }
+  .wave-bar:nth-child(12) { height: 12px; animation-delay: 0s; }
+
+  @keyframes wave {
+    0%, 100% { transform: scaleY(0.4); opacity: 0.5; }
+    50%       { transform: scaleY(1);   opacity: 1; }
+  }
+
+  /* Record button */
+  .record-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .btn-record {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 12px 24px;
+    border-radius: var(--radius-sm);
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .btn-record::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(255,255,255,0.1);
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .btn-record:hover::before { opacity: 1; }
+
+  .btn-record.recording {
+    background: var(--red);
+  }
+
+  .btn-record:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .mic-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+
+  .btn-secondary {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 12px 20px;
+    border-radius: var(--radius-sm);
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.05em;
+  }
+
+  .btn-secondary:hover {
+    border-color: var(--text-dim);
+    color: var(--text);
+  }
+
+  .btn-secondary:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  /* Polish section */
+  .polish-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    margin-bottom: 16px;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+
+  .section-label {
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .polish-options {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  .mode-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.05em;
+  }
+
+  .mode-btn.active {
+    background: var(--accent-glow);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .mode-btn:hover:not(.active) {
+    border-color: var(--text-dim);
+    color: var(--text);
+  }
+
+  .output-area {
+    min-height: 140px;
+    background: var(--surface2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    padding: 18px 20px;
+    margin-bottom: 16px;
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--text);
+    font-family: 'Fraunces', serif;
+    font-weight: 300;
+    position: relative;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .output-area .placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 14px;
+  }
+
+  .output-area.loading {
+    border-color: rgba(124, 106, 247, 0.3);
+  }
+
+  .loading-dots {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .loading-dots span {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: blink 1.2s ease-in-out infinite;
+  }
+
+  .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes blink {
+    0%, 100% { opacity: 0.2; }
+    50% { opacity: 1; }
+  }
+
+  .polish-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .btn-polish {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 11px 22px;
+    border-radius: var(--radius-sm);
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.25s;
+    letter-spacing: 0.08em;
+  }
+
+  .btn-polish:hover:not(:disabled) {
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 0 20px var(--accent-glow);
+  }
+
+  .btn-polish:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .btn-copy {
+    margin-left: auto;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 11px 18px;
+    border-radius: var(--radius-sm);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.05em;
+  }
+
+  .btn-copy:hover:not(:disabled) {
+    border-color: var(--green);
+    color: var(--green);
+  }
+
+  .btn-copy:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .btn-copy.copied {
+    border-color: var(--green);
+    color: var(--green);
+    background: var(--green-dim);
+  }
+
+  /* Settings panel (modal overlay) */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(13,13,15,0.85);
+    backdrop-filter: blur(8px);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s;
+  }
+
+  .overlay.open {
+    opacity: 1;
+    pointer-events: all;
+  }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    width: 100%;
+    max-width: 480px;
+    transform: translateY(16px);
+    transition: transform 0.25s;
+  }
+
+  .overlay.open .panel {
+    transform: translateY(0);
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 28px;
+  }
+
+  .panel-title {
+    font-family: 'Fraunces', serif;
+    font-size: 18px;
+    font-weight: 300;
+    font-style: italic;
+  }
+
+  .btn-close {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 20px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: color 0.2s;
+    line-height: 1;
+  }
+
+  .btn-close:hover { color: var(--text); }
+
+  .field-group {
+    margin-bottom: 24px;
+  }
+
+  .field-label {
+    display: block;
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+
+  .field-hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 6px;
+    letter-spacing: 0.03em;
+  }
+
+  input[type="text"], input[type="password"], select, textarea {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--accent);
+  }
+
+  select option { background: var(--surface2); }
+
+  /* Dictionary panel */
+  .dict-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .dict-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+  }
+
+  .dict-item .dict-from {
+    font-size: 12px;
+    color: var(--amber);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dict-arrow {
+    color: var(--text-muted);
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
+  .dict-item .dict-to {
+    font-size: 12px;
+    color: var(--text);
+    flex: 1.5;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dict-del {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: color 0.2s;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+
+  .dict-del:hover { color: var(--red); }
+
+  .dict-add-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .dict-add-row input {
+    flex: 1;
+  }
+
+  .btn-add {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 10px 16px;
+    border-radius: var(--radius-sm);
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .btn-add:hover {
+    border-color: var(--green);
+    color: var(--green);
+  }
+
+  .btn-save {
+    width: 100%;
+    background: var(--accent);
+    border: none;
+    color: #fff;
+    padding: 12px;
+    border-radius: var(--radius-sm);
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.08em;
+    margin-top: 8px;
+  }
+
+  .btn-save:hover { opacity: 0.88; }
+
+  /* Toast notification */
+  .toast {
+    position: fixed;
+    bottom: 32px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 20px;
+    font-size: 12px;
+    color: var(--text);
+    letter-spacing: 0.05em;
+    z-index: 200;
+    transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
+    white-space: nowrap;
+  }
+
+  .toast.show {
+    transform: translateX(-50%) translateY(0);
+  }
+
+  .toast.error { border-color: var(--red); color: var(--red); }
+  .toast.success { border-color: var(--green); color: var(--green); }
+
+  /* Error strip */
+  .error-strip {
+    background: rgba(248,113,113,0.08);
+    border: 1px solid rgba(248,113,113,0.25);
+    border-radius: var(--radius-sm);
+    padding: 10px 16px;
+    font-size: 12px;
+    color: var(--red);
+    margin-top: 12px;
+    display: none;
+    letter-spacing: 0.03em;
+  }
+
+  .error-strip.show { display: block; }
+
+  /* Divider */
+  .divider {
+    height: 1px;
+    background: var(--border-soft);
+    margin: 24px 0;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* Responsive */
+  @media (max-width: 600px) {
+    .app { padding: 24px 16px 60px; }
+    .record-section, .polish-section { padding: 20px; }
+    header { margin-bottom: 32px; }
+    .polish-actions { flex-direction: column; align-items: stretch; }
+    .btn-copy { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header>
+    <div class="logo">
+      <span class="logo-title">VoicePolish</span>
+      <span class="logo-sub">Speech · Refine · Transform</span>
+    </div>
+    <div class="header-actions">
+      <button class="btn-ghost" onclick="openPanel('dict')">Dictionary</button>
+      <button class="btn-ghost" onclick="openPanel('settings')">Settings</button>
+    </div>
+  </header>
+
+  <!-- RECORD SECTION -->
+  <div class="record-section">
+    <div class="record-header">
+      <span class="record-label">01 — Capture</span>
+      <div class="status-badge">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">idle</span>
+      </div>
+    </div>
+
+    <div class="transcript-area" id="transcriptBox">
+      <span class="placeholder" id="transcriptPlaceholder">Start recording to see your words appear here…</span>
+      <span id="finalText"></span><span class="interim" id="interimText"></span>
+    </div>
+
+    <div class="waveform" id="waveform">
+      <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+      <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+      <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+      <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
+    </div>
+
+    <div class="record-controls">
+      <button class="btn-record" id="recordBtn" onclick="toggleRecording()">
+        <svg class="mic-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+        <span id="recordBtnText">Start Recording</span>
+      </button>
+      <button class="btn-secondary" id="clearBtn" onclick="clearTranscript()" disabled>Clear</button>
+    </div>
+
+    <div class="error-strip" id="speechError"></div>
+  </div>
+
+  <!-- POLISH SECTION -->
+  <div class="polish-section">
+    <div class="section-header">
+      <span class="section-label">02 — Refine</span>
+    </div>
+
+    <div class="polish-options">
+      <button class="mode-btn active" data-mode="clean" onclick="selectMode(this)">Clean up</button>
+      <button class="mode-btn" data-mode="formal" onclick="selectMode(this)">Formal</button>
+      <button class="mode-btn" data-mode="casual" onclick="selectMode(this)">Casual</button>
+      <button class="mode-btn" data-mode="bullets" onclick="selectMode(this)">Bullet points</button>
+      <button class="mode-btn" data-mode="summary" onclick="selectMode(this)">Summary</button>
+    </div>
+
+    <div class="output-area" id="outputBox">
+      <span class="placeholder">Polished text will appear here…</span>
+    </div>
+
+    <div class="polish-actions">
+      <button class="btn-polish" id="polishBtn" onclick="polishText()" disabled>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+          <path d="M2 17l10 5 10-5"/>
+          <path d="M2 12l10 5 10-5"/>
+        </svg>
+        Polish
+      </button>
+      <button class="btn-copy" id="copyBtn" onclick="copyOutput()" disabled>Copy</button>
+    </div>
+
+    <div class="error-strip" id="polishError"></div>
+  </div>
+
+</div>
+
+<!-- SETTINGS PANEL -->
+<div class="overlay" id="settingsOverlay" onclick="closeOnOverlay(event, 'settings')">
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Settings</span>
+      <button class="btn-close" onclick="closePanel('settings')">×</button>
+    </div>
+
+    <div class="field-group">
+      <label class="field-label">AI Provider</label>
+      <select id="providerSelect" onchange="onProviderChange()">
+        <option value="openai">OpenAI (GPT-4o)</option>
+        <option value="anthropic">Anthropic (Claude)</option>
+        <option value="gemini">Google Gemini</option>
+      </select>
+    </div>
+
+    <div class="field-group">
+      <label class="field-label">API Key</label>
+      <input type="password" id="apiKeyInput" placeholder="Paste your API key here…"/>
+      <p class="field-hint">Stored locally in your browser. Never sent anywhere except the selected provider.</p>
+    </div>
+
+    <div class="field-group">
+      <label class="field-label">Transcription Language</label>
+      <select id="langSelect">
+        <option value="">Auto-detect</option>
+        <option value="en-US">English (US)</option>
+        <option value="en-GB">English (UK)</option>
+        <option value="zh-CN">Chinese (Simplified)</option>
+        <option value="zh-TW">Chinese (Traditional)</option>
+        <option value="es-ES">Spanish</option>
+        <option value="fr-FR">French</option>
+        <option value="de-DE">German</option>
+        <option value="ja-JP">Japanese</option>
+        <option value="ko-KR">Korean</option>
+        <option value="pt-BR">Portuguese (Brazil)</option>
+      </select>
+    </div>
+
+    <button class="btn-save" onclick="saveSettings()">Save Settings</button>
+  </div>
+</div>
+
+<!-- DICTIONARY PANEL -->
+<div class="overlay" id="dictOverlay" onclick="closeOnOverlay(event, 'dict')">
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">Custom Dictionary</span>
+      <button class="btn-close" onclick="closePanel('dict')">×</button>
+    </div>
+
+    <p style="font-size:11px;color:var(--text-dim);margin-bottom:16px;line-height:1.6;letter-spacing:0.03em;">
+      Map spoken phrases to exact replacements. Applied before AI Polish so the LLM sees your intended terms.
+    </p>
+
+    <div class="dict-list" id="dictList"></div>
+
+    <div class="dict-add-row">
+      <input type="text" id="dictFrom" placeholder="Spoken phrase…"/>
+      <span class="dict-arrow">→</span>
+      <input type="text" id="dictTo" placeholder="Replace with…"/>
+      <button class="btn-add" onclick="addDictEntry()">Add</button>
+    </div>
+
+    <div class="divider"></div>
+    <button class="btn-save" onclick="saveDict()">Save Dictionary</button>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+let recognition = null;
+let isRecording = false;
+let finalTranscript = '';
+let currentMode = 'clean';
+let polishedOutput = '';
+
+// Settings
+let settings = {
+  provider: 'openai',
+  apiKey: '',
+  lang: ''
+};
+
+// Dictionary: [{from, to}]
+let dictionary = [];
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+window.onload = () => {
+  loadSettings();
+  loadDict();
+  checkSpeechSupport();
+};
+
+function checkSpeechSupport() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    showError('speechError', 'Speech recognition is not supported in this browser. Please use Chrome or Edge.');
+    document.getElementById('recordBtn').disabled = true;
+  } else {
+    setStatus('ready', 'ready');
+  }
+}
+
+// ─── Recording ────────────────────────────────────────────────────────────────
+function toggleRecording() {
+  if (isRecording) {
+    stopRecording();
+  } else {
+    startRecording();
+  }
+}
+
+function startRecording() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  if (settings.lang) recognition.lang = settings.lang;
+
+  recognition.onstart = () => {
+    isRecording = true;
+    setStatus('recording', 'recording');
+    document.getElementById('recordBtn').classList.add('recording');
+    document.getElementById('recordBtnText').textContent = 'Stop Recording';
+    document.getElementById('waveform').classList.add('active');
+    document.getElementById('transcriptBox').classList.add('active');
+    hideError('speechError');
+  };
+
+  recognition.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i].transcript;
+      if (e.results[i].isFinal) {
+        finalTranscript += t + ' ';
+      } else {
+        interim += t;
+      }
+    }
+    updateTranscriptDisplay(interim);
+  };
+
+  recognition.onerror = (e) => {
+    const msgs = {
+      'not-allowed': 'Microphone access denied. Please allow mic permissions and try again.',
+      'no-speech': 'No speech detected. Try speaking louder or closer.',
+      'network': 'Network error. Check your connection.',
+      'aborted': null
+    };
+    const msg = msgs[e.error];
+    if (msg) showError('speechError', msg);
+    stopRecording();
+  };
+
+  recognition.onend = () => {
+    if (isRecording) recognition.start(); // keep going until manually stopped
+  };
+
+  recognition.start();
+}
+
+function stopRecording() {
+  isRecording = false;
+  if (recognition) {
+    recognition.onend = null;
+    recognition.stop();
+    recognition = null;
+  }
+  setStatus('ready', 'ready');
+  document.getElementById('recordBtn').classList.remove('recording');
+  document.getElementById('recordBtnText').textContent = 'Start Recording';
+  document.getElementById('waveform').classList.remove('active');
+  document.getElementById('transcriptBox').classList.remove('active');
+  document.getElementById('interimText').textContent = '';
+
+  const hasFinal = finalTranscript.trim().length > 0;
+  document.getElementById('clearBtn').disabled = !hasFinal;
+  document.getElementById('polishBtn').disabled = !hasFinal;
+  if (hasFinal) {
+    document.getElementById('transcriptPlaceholder').style.display = 'none';
+  }
+}
+
+function updateTranscriptDisplay(interim) {
+  const ft = document.getElementById('finalText');
+  const it = document.getElementById('interimText');
+  const placeholder = document.getElementById('transcriptPlaceholder');
+
+  let displayFinal = applyDictionary(finalTranscript);
+  ft.textContent = displayFinal;
+  it.textContent = interim;
+  placeholder.style.display = (finalTranscript || interim) ? 'none' : '';
+}
+
+function clearTranscript() {
+  finalTranscript = '';
+  document.getElementById('finalText').textContent = '';
+  document.getElementById('interimText').textContent = '';
+  document.getElementById('transcriptPlaceholder').style.display = '';
+  document.getElementById('clearBtn').disabled = true;
+  document.getElementById('polishBtn').disabled = true;
+  clearOutput();
+}
+
+// ─── Dictionary ───────────────────────────────────────────────────────────────
+function applyDictionary(text) {
+  let result = text;
+  dictionary.forEach(entry => {
+    if (!entry.from) return;
+    const regex = new RegExp(entry.from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    result = result.replace(regex, entry.to);
+  });
+  return result;
+}
+
+// ─── Polish ───────────────────────────────────────────────────────────────────
+const SYSTEM_PROMPTS = {
+  clean: `You are a text editor. Clean up the following transcribed speech: remove filler words (um, uh, like, you know, so), fix grammar, remove repetitions, and produce clear readable prose. Preserve the speaker's meaning and voice. Return only the cleaned text, no explanations.`,
+  formal: `You are a professional editor. Rewrite the following speech transcript into formal, polished prose suitable for business communication. Fix grammar, remove fillers, improve sentence structure. Return only the rewritten text.`,
+  casual: `You are a casual writing editor. Rewrite this speech transcript into natural, friendly, readable text. Remove fillers and repetitions while keeping it conversational. Return only the rewritten text.`,
+  bullets: `You are a note-taking assistant. Convert this speech transcript into clear, concise bullet points that capture all key ideas. Use "• " as bullet prefix. Return only the bullet points.`,
+  summary: `You are a summarizer. Read this speech transcript and produce a concise summary in 2-4 sentences capturing the main points. Return only the summary.`
+};
+
+async function polishText() {
+  const raw = applyDictionary(finalTranscript).trim();
+  if (!raw) return;
+
+  if (!settings.apiKey) {
+    showError('polishError', 'No API key set. Open Settings and paste your API key.');
+    return;
+  }
+
+  const btn = document.getElementById('polishBtn');
+  const outputBox = document.getElementById('outputBox');
+  btn.disabled = true;
+  outputBox.classList.add('loading');
+  outputBox.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div>';
+  hideError('polishError');
+
+  try {
+    const dictContext = dictionary.length > 0
+      ? `\n\nUser's custom terms (preserve these exactly):\n${dictionary.map(d => `"${d.from}" → "${d.to}"`).join('\n')}`
+      : '';
+
+    const systemPrompt = SYSTEM_PROMPTS[currentMode] + dictContext;
+    let result = '';
+
+    if (settings.provider === 'openai') {
+      result = await callOpenAI(systemPrompt, raw);
+    } else if (settings.provider === 'anthropic') {
+      result = await callAnthropic(systemPrompt, raw);
+    } else if (settings.provider === 'gemini') {
+      result = await callGemini(systemPrompt, raw);
+    }
+
+    polishedOutput = result;
+    outputBox.classList.remove('loading');
+    outputBox.textContent = result;
+    document.getElementById('copyBtn').disabled = false;
+  } catch (err) {
+    outputBox.classList.remove('loading');
+    outputBox.innerHTML = '<span class="placeholder">Polish failed — see error below.</span>';
+    showError('polishError', err.message || 'Unknown error. Check your API key and try again.');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function callOpenAI(system, user) {
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${settings.apiKey}`
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user }
+      ],
+      max_tokens: 1000,
+      temperature: 0.4
+    })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`OpenAI error: ${err.error?.message || res.statusText}`);
+  }
+  const data = await res.json();
+  return data.choices[0].message.content.trim();
+}
+
+async function callAnthropic(system, user) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': settings.apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1000,
+      system: system,
+      messages: [{ role: 'user', content: user }]
+    })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`Anthropic error: ${err.error?.message || res.statusText}`);
+  }
+  const data = await res.json();
+  return data.content[0].text.trim();
+}
+
+async function callGemini(system, user) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${settings.apiKey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: `${system}\n\n${user}` }] }],
+      generationConfig: { maxOutputTokens: 1000, temperature: 0.4 }
+    })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`Gemini error: ${err.error?.message || res.statusText}`);
+  }
+  const data = await res.json();
+  return data.candidates[0].content.parts[0].text.trim();
+}
+
+// ─── Copy ─────────────────────────────────────────────────────────────────────
+function copyOutput() {
+  if (!polishedOutput) return;
+  navigator.clipboard.writeText(polishedOutput).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = 'Copied ✓';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = 'Copy';
+      btn.classList.remove('copied');
+    }, 2000);
+  });
+}
+
+function clearOutput() {
+  polishedOutput = '';
+  document.getElementById('outputBox').innerHTML = '<span class="placeholder">Polished text will appear here…</span>';
+  document.getElementById('copyBtn').disabled = true;
+}
+
+// ─── Mode selection ───────────────────────────────────────────────────────────
+function selectMode(btn) {
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentMode = btn.dataset.mode;
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+function loadSettings() {
+  const saved = localStorage.getItem('vp_settings');
+  if (saved) {
+    settings = { ...settings, ...JSON.parse(saved) };
+  }
+  document.getElementById('providerSelect').value = settings.provider;
+  document.getElementById('apiKeyInput').value = settings.apiKey;
+  document.getElementById('langSelect').value = settings.lang;
+}
+
+function saveSettings() {
+  settings.provider = document.getElementById('providerSelect').value;
+  settings.apiKey = document.getElementById('apiKeyInput').value.trim();
+  settings.lang = document.getElementById('langSelect').value;
+  localStorage.setItem('vp_settings', JSON.stringify(settings));
+  closePanel('settings');
+  showToast('Settings saved', 'success');
+}
+
+function onProviderChange() {
+  // Could show provider-specific hints
+}
+
+// ─── Dictionary ───────────────────────────────────────────────────────────────
+function loadDict() {
+  const saved = localStorage.getItem('vp_dict');
+  if (saved) dictionary = JSON.parse(saved);
+  renderDictList();
+}
+
+function renderDictList() {
+  const list = document.getElementById('dictList');
+  if (dictionary.length === 0) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">No entries yet.</div>';
+    return;
+  }
+  list.innerHTML = dictionary.map((entry, i) => `
+    <div class="dict-item">
+      <span class="dict-from">${escHtml(entry.from)}</span>
+      <span class="dict-arrow">→</span>
+      <span class="dict-to">${escHtml(entry.to)}</span>
+      <button class="dict-del" onclick="removeDictEntry(${i})">×</button>
+    </div>
+  `).join('');
+}
+
+function addDictEntry() {
+  const from = document.getElementById('dictFrom').value.trim();
+  const to = document.getElementById('dictTo').value.trim();
+  if (!from || !to) { showToast('Both fields are required', 'error'); return; }
+  dictionary.push({ from, to });
+  document.getElementById('dictFrom').value = '';
+  document.getElementById('dictTo').value = '';
+  renderDictList();
+}
+
+function removeDictEntry(i) {
+  dictionary.splice(i, 1);
+  renderDictList();
+}
+
+function saveDict() {
+  localStorage.setItem('vp_dict', JSON.stringify(dictionary));
+  closePanel('dict');
+  showToast('Dictionary saved', 'success');
+}
+
+// ─── Panel helpers ────────────────────────────────────────────────────────────
+function openPanel(name) {
+  document.getElementById(name + 'Overlay').classList.add('open');
+  if (name === 'dict') renderDictList();
+}
+
+function closePanel(name) {
+  document.getElementById(name + 'Overlay').classList.remove('open');
+}
+
+function closeOnOverlay(event, name) {
+  if (event.target === document.getElementById(name + 'Overlay')) closePanel(name);
+}
+
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+function setStatus(dotClass, text) {
+  const dot = document.getElementById('statusDot');
+  dot.className = 'status-dot ' + dotClass;
+  document.getElementById('statusText').textContent = text;
+}
+
+function showError(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.classList.add('show');
+}
+
+function hideError(id) {
+  document.getElementById(id).classList.remove('show');
+}
+
+function showToast(msg, type = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + type;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>
