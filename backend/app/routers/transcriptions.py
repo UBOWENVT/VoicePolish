@@ -7,6 +7,7 @@ Endpoints:
     GET    /api/transcriptions/{id}   Get one transcription by id
 """
 
+import logging
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -14,6 +15,12 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Transcription
 from app.schemas import TranscriptionCreate, TranscriptionRead
+from app.services.vocab_analyzer import update_word_stats
+
+# Module-level logger. Anything we log here goes to uvicorn's stdout, alongside
+# the request logs. The name (__name__) becomes "app.routers.transcriptions"
+# in the log line, making it easy to grep.
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------------------------
@@ -52,6 +59,19 @@ def create_transcription(
     db.add(new_record)        # Stage the INSERT
     db.commit()               # Actually run it — now the row exists in DB
     db.refresh(new_record)    # Pull back server-generated fields (id, created_at)
+
+    # ── Side-effect hook: update word frequency stats ──
+    # This is a SECONDARY concern. If it fails, the transcription is still
+    # saved (more important to the user). We log the error so it's debuggable
+    # but never re-raise — the user shouldn't see a failed save toast just
+    # because word counting hiccuped.
+    try:
+        update_word_stats(db, new_record.raw_text)
+    except Exception as e:
+        logger.warning(
+            "update_word_stats failed for transcription id=%s: %s",
+            new_record.id, e,
+        )
 
     return new_record
 
