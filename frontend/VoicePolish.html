@@ -909,9 +909,9 @@
     </div>
 
     <div class="field-group">
-      <label class="field-label">API Key</label>
-      <input type="password" id="apiKeyInput" placeholder="Paste your API key here…"/>
-      <p class="field-hint">Stored locally in your browser. Never sent anywhere except the selected provider.</p>
+      <label class="field-label">API Key (optional)</label>
+      <input type="password" id="apiKeyInput" placeholder="Not required — backend uses its own key"/>
+      <p class="field-hint">Polish now uses the backend's API key. This field is kept for future use (e.g. overriding the default).</p>
     </div>
 
     <div class="field-group">
@@ -992,6 +992,9 @@ let isRecording = false;
 let finalTranscript = '';
 let currentMode = 'clean';
 let polishedOutput = '';
+// Tracks the DB id of the currently-loaded transcription (set after save or
+// when loading from history). Used to tell /api/polish which row to update.
+let currentTranscriptionId = null;
 
 // Backend URL (set once, used everywhere).
 const API_BASE = 'http://localhost:8000';
@@ -1120,6 +1123,7 @@ function updateTranscriptDisplay(interim) {
 
 function clearTranscript() {
   finalTranscript = '';
+  currentTranscriptionId = null;   // forget which row this was
   document.getElementById('finalText').textContent = '';
   document.getElementById('interimText').textContent = '';
   document.getElementById('transcriptPlaceholder').style.display = '';
@@ -1140,22 +1144,12 @@ function applyDictionary(text) {
 }
 
 // ─── Polish ───────────────────────────────────────────────────────────────────
-const SYSTEM_PROMPTS = {
-  clean: `You are a text editor. Clean up the following transcribed speech: remove filler words (um, uh, like, you know, so), fix grammar, remove repetitions, and produce clear readable prose. Preserve the speaker's meaning and voice. Return only the cleaned text, no explanations.`,
-  formal: `You are a professional editor. Rewrite the following speech transcript into formal, polished prose suitable for business communication. Fix grammar, remove fillers, improve sentence structure. Return only the rewritten text.`,
-  casual: `You are a casual writing editor. Rewrite this speech transcript into natural, friendly, readable text. Remove fillers and repetitions while keeping it conversational. Return only the rewritten text.`,
-  bullets: `You are a note-taking assistant. Convert this speech transcript into clear, concise bullet points that capture all key ideas. Use "• " as bullet prefix. Return only the bullet points.`,
-  summary: `You are a summarizer. Read this speech transcript and produce a concise summary in 2-4 sentences capturing the main points. Return only the summary.`
-};
-
+// Calls our backend /api/polish endpoint. The backend handles the LLM call
+// (using its own API key) and optionally writes the result back to the
+// transcription row identified by currentTranscriptionId.
 async function polishText() {
   const raw = applyDictionary(finalTranscript).trim();
   if (!raw) return;
-
-  if (!settings.apiKey) {
-    showError('polishError', 'No API key set. Open Settings and paste your API key.');
-    return;
-  }
 
   const btn = document.getElementById('polishBtn');
   const outputBox = document.getElementById('outputBox');
@@ -1165,99 +1159,36 @@ async function polishText() {
   hideError('polishError');
 
   try {
-    const dictContext = dictionary.length > 0
-      ? `\n\nUser's custom terms (preserve these exactly):\n${dictionary.map(d => `"${d.from}" → "${d.to}"`).join('\n')}`
-      : '';
-
-    const systemPrompt = SYSTEM_PROMPTS[currentMode] + dictContext;
-    let result = '';
-
-    if (settings.provider === 'openai') {
-      result = await callOpenAI(systemPrompt, raw);
-    } else if (settings.provider === 'anthropic') {
-      result = await callAnthropic(systemPrompt, raw);
-    } else if (settings.provider === 'gemini') {
-      result = await callGemini(systemPrompt, raw);
+    const res = await fetch(`${API_BASE}/api/polish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        raw_text: raw,
+        mode: currentMode,
+        // If we have a row id, the backend will persist the result.
+        // If null, polish runs but isn't saved.
+        transcription_id: currentTranscriptionId,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || res.statusText);
     }
-
-    polishedOutput = result;
+    const data = await res.json();
+    polishedOutput = data.polished_text;
     outputBox.classList.remove('loading');
-    outputBox.textContent = result;
+    outputBox.textContent = data.polished_text;
     document.getElementById('copyBtn').disabled = false;
+    if (data.transcription_id) {
+      showToast(`Polished (saved to #${data.transcription_id})`, 'success');
+    }
   } catch (err) {
     outputBox.classList.remove('loading');
     outputBox.innerHTML = '<span class="placeholder">Polish failed — see error below.</span>';
-    showError('polishError', err.message || 'Unknown error. Check your API key and try again.');
+    showError('polishError', err.message || 'Unknown error.');
   } finally {
     btn.disabled = false;
   }
-}
-
-async function callOpenAI(system, user) {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${settings.apiKey}`
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user }
-      ],
-      max_tokens: 1000,
-      temperature: 0.4
-    })
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI error: ${err.error?.message || res.statusText}`);
-  }
-  const data = await res.json();
-  return data.choices[0].message.content.trim();
-}
-
-async function callAnthropic(system, user) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': settings.apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1000,
-      system: system,
-      messages: [{ role: 'user', content: user }]
-    })
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`Anthropic error: ${err.error?.message || res.statusText}`);
-  }
-  const data = await res.json();
-  return data.content[0].text.trim();
-}
-
-async function callGemini(system, user) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${settings.apiKey}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: `${system}\n\n${user}` }] }],
-      generationConfig: { maxOutputTokens: 1000, temperature: 0.4 }
-    })
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`Gemini error: ${err.error?.message || res.statusText}`);
-  }
-  const data = await res.json();
-  return data.candidates[0].content.parts[0].text.trim();
 }
 
 // ─── Copy ─────────────────────────────────────────────────────────────────────
@@ -1443,6 +1374,8 @@ async function saveTranscriptionToBackend() {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || res.statusText);
     }
+    const saved = await res.json();
+    currentTranscriptionId = saved.id;   // remember the DB id for later polish
     showToast('Saved to backend', 'success');
   } catch (err) {
     showToast(`Save failed: ${err.message}`, 'error');
@@ -1492,6 +1425,7 @@ async function loadTranscriptionIntoEditor(id) {
     const item = await res.json();
 
     finalTranscript = item.raw_text;
+    currentTranscriptionId = item.id;   // remember which row we're now editing
     document.getElementById('finalText').textContent = item.raw_text;
     document.getElementById('interimText').textContent = '';
     document.getElementById('transcriptPlaceholder').style.display = 'none';
