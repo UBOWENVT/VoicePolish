@@ -8,6 +8,7 @@ to include them when it creates tables.
 Tables defined here:
     Transcription  — one row per recording session
     Vocabulary     — user's custom word dictionary
+    WordStat       — accumulated word frequencies across all transcriptions
 """
 
 from datetime import datetime
@@ -86,3 +87,33 @@ class Vocabulary(Base):
 
     def __repr__(self):
         return f"<Vocabulary {self.term!r} -> {self.replacement!r}>"
+
+
+# -----------------------------------------------------------------------------
+# WordStat: accumulated word frequencies across all transcriptions
+# -----------------------------------------------------------------------------
+# Each row = one unique word + how many times it has appeared across all
+# transcriptions ever processed. Updated by the vocab_analyzer service every
+# time a new transcription is saved.
+#
+# Words are stored lowercased, after stopword filtering and tokenization.
+# This table is the raw material for /api/vocabulary/suggestions.
+# -----------------------------------------------------------------------------
+class WordStat(Base):
+    __tablename__ = "word_stats"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # The word itself, lowercased. Unique because we accumulate counts
+    # rather than inserting a row per occurrence.
+    word = Column(String(128), nullable=False, unique=True, index=True)
+
+    # Total occurrences seen so far. Incremented on each new transcription.
+    count = Column(Integer, nullable=False, default=1)
+
+    # When the word was last seen. Useful for future features (e.g. "trending
+    # this week") and for breaking ties when sorting suggestions.
+    last_seen = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<WordStat {self.word!r} count={self.count}>"
