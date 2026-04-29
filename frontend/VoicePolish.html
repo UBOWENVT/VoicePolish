@@ -1163,9 +1163,8 @@ async function startRecording() {
       mediaStream = null;
     }
 
-    // M8.2 stops here: we have an audio Blob, no transcript yet.
-    // M8.3 will add: upload currentAudioBlob to /api/transcribe.
-    showToast(`Recorded ${(currentAudioBlob.size / 1024).toFixed(1)} KB — ready (M8.3 will transcribe)`, 'success');
+    // M8.3: kick off the transcribe pipeline.
+    transcribeAndSave();
   };
 
   mediaRecorder.start();
@@ -1187,6 +1186,80 @@ function stopRecording() {
   document.getElementById('recordBtnText').textContent = 'Start Recording';
   document.getElementById('waveform').classList.remove('active');
   document.getElementById('transcriptBox').classList.remove('active');
+}
+
+// M8.3: upload the recorded Blob to the backend, get text from Whisper,
+// then run the original "save to transcriptions" pipeline.
+async function transcribeAndSave() {
+  if (!currentAudioBlob || currentAudioBlob.size === 0) {
+    showToast('No audio to transcribe', 'error');
+    return;
+  }
+
+  // Show a transcribing state in the Capture box so the user knows we're working.
+  const placeholder = document.getElementById('transcriptPlaceholder');
+  const finalEl = document.getElementById('finalText');
+  const interimEl = document.getElementById('interimText');
+  placeholder.style.display = 'none';
+  finalEl.textContent = '';
+  interimEl.textContent = 'Transcribing with Whisper…';
+
+  // Build the multipart body. NEVER set Content-Type manually for FormData —
+  // the browser auto-adds it with the right boundary string.
+  const formData = new FormData();
+  // Pick a filename extension matching the recorder's mimeType so the backend
+  // (and Whisper) know how to decode the bytes.
+  const ext = (currentAudioBlob.type.includes('webm')) ? 'webm'
+            : (currentAudioBlob.type.includes('mp4'))  ? 'mp4'
+            : (currentAudioBlob.type.includes('ogg'))  ? 'ogg'
+            : 'webm';
+  formData.append('file', currentAudioBlob, `recording.${ext}`);
+  // Optional language hint. Web Speech-style codes ("en-US") need the prefix
+  // stripped to match Whisper's ISO-639-1 codes ("en").
+  if (settings.lang) {
+    const isoCode = settings.lang.split('-')[0];
+    formData.append('language', isoCode);
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/transcribe`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || res.statusText);
+    }
+    const data = await res.json();
+
+    // Got the text — update state and UI just like the old SpeechRecognition
+    // onresult handler used to.
+    finalTranscript = (data.text || '').trim() + ' ';
+    interimEl.textContent = '';
+    finalEl.textContent = applyDictionary(finalTranscript);
+
+    const hasFinal = finalTranscript.trim().length > 0;
+    document.getElementById('clearBtn').disabled = !hasFinal;
+    document.getElementById('polishBtn').disabled = !hasFinal;
+
+    if (!hasFinal) {
+      // Whisper returned empty (silent recording, etc.)
+      placeholder.style.display = '';
+      showToast('Whisper returned no text — try speaking louder or longer', 'error');
+      return;
+    }
+
+    showToast('Transcribed', 'success');
+
+    // Reuse the existing save flow — saves to /api/transcriptions, sets
+    // currentTranscriptionId, triggers the word_stats hook on the backend.
+    saveTranscriptionToBackend();
+
+  } catch (err) {
+    interimEl.textContent = '';
+    placeholder.style.display = '';
+    showToast(`Transcribe failed: ${err.message}`, 'error');
+  }
 }
 
 function updateTranscriptDisplay(interim) {
