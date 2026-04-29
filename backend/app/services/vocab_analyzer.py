@@ -12,6 +12,7 @@ Key functions:
     update_word_stats(db, text)      — side effect: updates word_stats table
     get_top_suggestions(db, n=20)    — read: top N by raw count (M5)
     get_tfidf_suggestions(db, n=20)  — read: top N by TF-IDF score (M6)
+    get_llm_suggestions(db, n=15)    — read: TF-IDF candidates filtered by Claude (M7)
 """
 
 from datetime import datetime
@@ -281,3 +282,211 @@ def get_tfidf_suggestions(db: Session, limit: int = 20) -> list[TfidfSuggestion]
         )
         for word, score, doc_count in candidates
     ]
+
+
+# =============================================================================
+# M7: LLM-assisted suggestions (Claude as a semantic filter)
+# =============================================================================
+# Architecture: two-stage candidate generation.
+#   Stage 1 (cheap):  TF-IDF picks ~30 statistically interesting words
+#   Stage 2 (smart):  Claude reviews them with context, returns the ~15 it
+#                     thinks are genuinely worth adding to a personal
+#                     vocabulary, with a suggested replacement and a reason.
+#
+# This pattern — "cheap algo generates candidates, expensive AI ranks them" —
+# is standard in production ML systems (search, recsys, ad ranking).
+
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LlmSuggestion:
+    """One vocabulary suggestion produced by the LLM filter."""
+    term: str          # the spoken phrase to match (lowercased)
+    replacement: str   # the LLM's suggested canonical form
+    reason: str        # short human-readable justification
+    score: float       # TF-IDF score that earned it a spot in the candidate set
+    count: int         # raw occurrence count
+    document_count: int  # how many transcriptions this word appears in
+
+
+# Maximum number of TF-IDF candidates to send to the LLM. Keeps token cost
+# bounded; 30 is enough for the LLM to have signal without being overwhelmed.
+_LLM_CANDIDATE_POOL = 30
+
+# Maximum number of context snippets per word to include in the prompt.
+# More context = better LLM judgment, but more tokens.
+_SNIPPETS_PER_WORD = 2
+_SNIPPET_CHARS = 100
+
+
+_LLM_SYSTEM_PROMPT = """You are a personal vocabulary curator. The user records voice notes that get transcribed; afterwards, they review high-frequency words and add domain-specific terms to a custom dictionary used to clean up future transcripts.
+
+You will receive a list of candidate words (already filtered by TF-IDF) along with example sentences where each word appeared. Your job: decide which candidates are genuinely worth adding to the user's personal dictionary, and for each, suggest a canonical "replacement" form.
+
+Good candidates are:
+  - Domain-specific terminology (technical terms, jargon, project names, acronyms)
+  - Proper nouns (people, products, companies the user works with)
+  - Words the user clearly mispronounces or that auto-transcription mangles
+
+Bad candidates (REJECT these):
+  - Common English words that just happen to be frequent ("today", "think", "actually")
+  - Filler/transition words missed by stopword filters
+  - Obvious typos or noise (single random letters, gibberish, transcription artifacts)
+  - Inflected forms when the base form is more useful (e.g. prefer "embedding" over "embeddings")
+
+For the replacement field:
+  - For acronyms/initialisms, capitalize and optionally expand: "rag" → "RAG (Retrieval-Augmented Generation)"
+  - For proper nouns, fix the casing: "openai" → "OpenAI"
+  - For technical terms with standard spelling, just match the standard: "finetune" → "fine-tune"
+  - For words that are already fine as-is, the replacement equals the term
+
+Respond with ONLY a JSON array, no preamble or markdown. Each item:
+{
+  "term": "<lowercased original word>",
+  "replacement": "<your suggested canonical form>",
+  "reason": "<10 words or fewer explaining why this is worth adding>"
+}
+
+Return at most 15 items. Omit any candidate you'd reject. STRONGLY PREFER returning fewer items than padding with marginal candidates — an empty list [] is a valid and often correct answer when the user's transcripts don't contain genuine domain-specific terminology. Quality over quantity."""
+
+
+def _gather_snippets(db: Session, word: str, max_snippets: int = _SNIPPETS_PER_WORD) -> list[str]:
+    """
+    Find up to N short snippets from transcriptions where `word` appears.
+    Used to give the LLM enough context to judge meaning.
+    """
+    # Case-insensitive substring match. SQLite's LIKE is case-insensitive for
+    # ASCII by default, which suits our lowercased word_stats.
+    rows = (
+        db.query(Transcription.raw_text)
+        .filter(Transcription.raw_text.ilike(f"%{word}%"))
+        .limit(max_snippets)
+        .all()
+    )
+    snippets = []
+    for row in rows:
+        text = row.raw_text or ""
+        # Find the word and grab a window around it for context.
+        idx = text.lower().find(word)
+        if idx == -1:
+            continue
+        start = max(0, idx - _SNIPPET_CHARS // 2)
+        end = min(len(text), idx + len(word) + _SNIPPET_CHARS // 2)
+        snippet = text[start:end].strip()
+        if start > 0:
+            snippet = "…" + snippet
+        if end < len(text):
+            snippet = snippet + "…"
+        snippets.append(snippet)
+    return snippets
+
+
+def get_llm_suggestions(db: Session, limit: int = 15) -> list[LlmSuggestion]:
+    """
+    Two-stage suggestion pipeline:
+        1. Get TF-IDF top _LLM_CANDIDATE_POOL words
+        2. Send them + example snippets to Claude
+        3. Parse Claude's JSON response, join back with TF-IDF scores
+
+    Returns at most `limit` LlmSuggestions. May return fewer if Claude rejects
+    most candidates as not worth adding.
+
+    Falls back to converting TF-IDF results to LlmSuggestions (with the word
+    itself as replacement, no reason) if the LLM call fails — the user still
+    gets useful output.
+    """
+    # Lazy import: avoids a hard dependency on polish_service when unused.
+    from app.services.polish_service import _get_client
+    from app.core.config import DEFAULT_ANTHROPIC_MODEL
+
+    # ── Stage 1: get TF-IDF candidates ──
+    tfidf_candidates = get_tfidf_suggestions(db, limit=_LLM_CANDIDATE_POOL)
+    if not tfidf_candidates:
+        return []
+
+    # Index by word for later joining with the LLM's response.
+    by_word = {c.word: c for c in tfidf_candidates}
+
+    # ── Build the user prompt: list of candidates with snippets ──
+    lines = ["Here are the candidates with example contexts:\n"]
+    for cand in tfidf_candidates:
+        snippets = _gather_snippets(db, cand.word)
+        snippets_str = "\n".join(f'    - "{s}"' for s in snippets) if snippets else "    (no snippets available)"
+        lines.append(f"- {cand.word!r} (appears in {cand.document_count} doc(s)):\n{snippets_str}")
+    user_prompt = "\n".join(lines)
+
+    # ── Stage 2: ask Claude ──
+    try:
+        client = _get_client()
+        response = client.messages.create(
+            model=DEFAULT_ANTHROPIC_MODEL,
+            max_tokens=2048,
+            system=_LLM_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        # Concatenate any text blocks (defensive against tool-use blocks).
+        raw = "".join(b.text for b in response.content if hasattr(b, "text")).strip()
+
+        # Strip a possible markdown code fence ("```json ... ```") if Claude
+        # decides to wrap the JSON despite our instruction.
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]   # drop the opening fence line
+            if raw.endswith("```"):
+                raw = raw.rsplit("```", 1)[0]
+            raw = raw.strip()
+
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            raise ValueError(f"Expected a JSON array, got {type(parsed).__name__}")
+
+    except Exception as e:
+        logger.warning("LLM suggestion call failed: %s. Falling back to TF-IDF.", e)
+        # Fallback: turn TF-IDF results into LlmSuggestions with sensible defaults.
+        return [
+            LlmSuggestion(
+                term=c.word,
+                replacement=c.word,
+                reason="(LLM unavailable; raw TF-IDF candidate)",
+                score=c.score,
+                count=c.count,
+                document_count=c.document_count,
+            )
+            for c in tfidf_candidates[:limit]
+        ]
+
+    # ── Stage 3: join LLM output with TF-IDF metadata, build results ──
+    results: list[LlmSuggestion] = []
+    for item in parsed:
+        # Defensive parsing — LLMs sometimes drop fields or invent terms.
+        if not isinstance(item, dict):
+            continue
+        term = (item.get("term") or "").strip().lower()
+        replacement = (item.get("replacement") or "").strip()
+        reason = (item.get("reason") or "").strip()
+        if not term or not replacement:
+            continue
+
+        # Look up TF-IDF metadata. If the LLM hallucinated a term not in our
+        # candidate pool, skip it — we don't trust suggestions ungrounded in
+        # the actual data.
+        meta = by_word.get(term)
+        if meta is None:
+            logger.debug("LLM returned term %r not in candidate pool, skipping", term)
+            continue
+
+        results.append(LlmSuggestion(
+            term=term,
+            replacement=replacement,
+            reason=reason,
+            score=meta.score,
+            count=meta.count,
+            document_count=meta.document_count,
+        ))
+        if len(results) >= limit:
+            break
+
+    return results
