@@ -183,6 +183,8 @@
   .method-btn.active {
     background: var(--accent);
     color: var(--bg);
+    font-weight: 500;
+    box-shadow: 0 0 8px var(--accent-glow), inset 0 0 0 1px var(--accent);
   }
 
   /* Main record section */
@@ -997,6 +999,7 @@
     <div class="method-toggle" style="margin-bottom:10px;">
       <button id="methodCountBtn" class="method-btn active" onclick="setSuggestionMethod('count')">Count</button>
       <button id="methodTfidfBtn" class="method-btn" onclick="setSuggestionMethod('tfidf')">TF-IDF</button>
+      <button id="methodLlmBtn" class="method-btn" onclick="setSuggestionMethod('llm')">LLM</button>
     </div>
     <p id="suggestionsHint" style="font-size:10px;color:var(--text-muted);margin-bottom:12px;line-height:1.6;">
       Raw frequency. Surfaces words you say often — may include common ones.
@@ -1562,10 +1565,14 @@ openPanel = function(name) {
 
 // Fetch top-N high-frequency words from /api/vocabulary/suggestions and
 // render them in the Dictionary panel. Uses currentSuggestionMethod
-// (set by setSuggestionMethod) to pick count vs tfidf ranking.
+// (set by setSuggestionMethod) to pick count vs tfidf vs llm ranking.
 async function loadSuggestions() {
   const list = document.getElementById('suggestionsList');
-  list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">Loading…</div>';
+  // LLM mode is slow (3-8s for a Claude call), make the loading message reflect that.
+  const loadingText = currentSuggestionMethod === 'llm'
+    ? 'Asking Claude to curate suggestions… (a few seconds)'
+    : 'Loading…';
+  list.innerHTML = `<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">${loadingText}</div>`;
 
   try {
     const url = `${API_BASE}/api/vocabulary/suggestions?limit=20&method=${currentSuggestionMethod}`;
@@ -1574,15 +1581,38 @@ async function loadSuggestions() {
     const items = await res.json();
 
     if (items.length === 0) {
-      list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">No suggestions yet — record a few sessions first.</div>';
+      const emptyMsg = currentSuggestionMethod === 'llm'
+        ? 'Claude found no domain-specific terms worth adding. Try recording more focused topics.'
+        : 'No suggestions yet — record a few sessions first.';
+      list.innerHTML = `<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">${emptyMsg}</div>`;
       return;
     }
 
     list.innerHTML = items.map(item => {
-      // Build the right-side metadata depending on method:
-      //   count mode: ×N
-      //   tfidf mode: ×N · in M docs   (score is implicit — the ranking IS the score)
       const safeWord = escHtml(item.word);
+
+      // LLM mode: rich card with replacement + reason.
+      if (currentSuggestionMethod === 'llm' && item.replacement) {
+        const safeReplacement = escHtml(item.replacement);
+        const safeReason = escHtml(item.reason || '');
+        return `
+          <div style="background:var(--surface2);border:1px solid var(--border-soft);border-radius:var(--radius-sm);padding:10px 12px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+              <span style="font-size:12px;color:var(--text-dim);">${safeWord}</span>
+              <span style="font-size:11px;color:var(--text-muted);">→</span>
+              <span style="font-size:12px;color:var(--text);font-weight:500;flex:1;">${safeReplacement}</span>
+              <button onclick="acceptSuggestion('${safeWord.replace(/'/g, "\\'")}', '${safeReplacement.replace(/'/g, "\\'")}')"
+                      style="background:none;border:1px solid var(--border);color:var(--text-dim);padding:2px 8px;border-radius:4px;font-family:inherit;font-size:11px;cursor:pointer;"
+                      title="Use this replacement">+</button>
+            </div>
+            ${safeReason ? `<div style="font-size:10px;color:var(--text-dim);font-style:italic;line-height:1.5;padding-left:2px;">“${safeReason}”</div>` : ''}
+          </div>
+        `;
+      }
+
+      // count / tfidf mode: simple row.
+      // count mode: ×N
+      // tfidf mode: ×N · in M docs
       const meta = (currentSuggestionMethod === 'tfidf' && item.document_count != null)
         ? `×${item.count} · ${item.document_count} doc${item.document_count === 1 ? '' : 's'}`
         : `×${item.count}`;
@@ -1603,27 +1633,33 @@ async function loadSuggestions() {
 
 // Switch ranking method: update state, update button styles, refetch.
 function setSuggestionMethod(method) {
-  if (method !== 'count' && method !== 'tfidf') return;
+  if (method !== 'count' && method !== 'tfidf' && method !== 'llm') return;
   currentSuggestionMethod = method;
 
   // Update button "active" classes
   document.getElementById('methodCountBtn').classList.toggle('active', method === 'count');
   document.getElementById('methodTfidfBtn').classList.toggle('active', method === 'tfidf');
+  document.getElementById('methodLlmBtn').classList.toggle('active', method === 'llm');
 
   // Update the explanatory hint below the toggle
   const hint = document.getElementById('suggestionsHint');
-  hint.textContent = method === 'tfidf'
-    ? 'TF-IDF ranking. Surfaces words distinctive to your topics — less common, more characteristic.'
-    : 'Raw frequency. Surfaces words you say often — may include common ones.';
+  if (method === 'llm') {
+    hint.textContent = 'AI-curated. Claude reviews TF-IDF candidates and suggests canonical replacements with reasons. Slower, costs API tokens.';
+  } else if (method === 'tfidf') {
+    hint.textContent = 'TF-IDF ranking. Surfaces words distinctive to your topics — less common, more characteristic.';
+  } else {
+    hint.textContent = 'Raw frequency. Surfaces words you say often — may include common ones.';
+  }
 
   loadSuggestions();
 }
 
-// Accept a suggestion: pre-fill the dict-add row with the word.
-// User can edit the replacement before clicking "Add".
-function acceptSuggestion(word) {
+// Accept a suggestion: pre-fill the dict-add row.
+// If `replacement` is provided (LLM mode), use it as the replacement value.
+// Otherwise (count/tfidf mode), default replacement to the word itself for editing.
+function acceptSuggestion(word, replacement) {
   document.getElementById('dictFrom').value = word;
-  document.getElementById('dictTo').value = word;   // sensible default; user can edit
+  document.getElementById('dictTo').value = replacement || word;
   document.getElementById('dictTo').focus();
   document.getElementById('dictTo').select();
 }
