@@ -247,17 +247,26 @@ def get_tfidf_suggestions(db: Session, limit: int = 20) -> list[TfidfSuggestion]
     # ── Step 4: filter vocabulary, sort, take top N ──
     existing_terms = {row.term for row in db.query(Vocabulary.term).all()}
 
-    # Build (word, score, doc_count) triples, drop already-in-vocab.
+    # Build (word, score, doc_count) triples. Multiple guards here:
+    #   - drop empty / whitespace-only tokens (sklearn occasionally yields these)
+    #   - drop words already in vocabulary
+    #   - drop zero-score candidates (no signal at all)
     candidates = [
         (feature_names[i], float(summed_scores[i]), int(doc_freq[i]))
         for i in range(len(feature_names))
-        if feature_names[i] not in existing_terms
+        if feature_names[i]
+        and feature_names[i].strip()
+        and feature_names[i] not in existing_terms
+        and float(summed_scores[i]) > 0
     ]
     # Sort by score descending
     candidates.sort(key=lambda x: x[1], reverse=True)
     candidates = candidates[:limit]
 
-    # Look up raw count from word_stats for display (we have it cached there).
+    # Look up raw count from word_stats for display.
+    # If a sklearn-tokenized word isn't in word_stats (e.g. transcriptions that
+    # predate the M5.3 hook), fall back to the document_count as a sensible
+    # placeholder so the UI doesn't show "×0".
     word_to_count = {
         row.word: row.count
         for row in db.query(WordStat).filter(WordStat.word.in_([c[0] for c in candidates])).all()
@@ -267,7 +276,7 @@ def get_tfidf_suggestions(db: Session, limit: int = 20) -> list[TfidfSuggestion]
         TfidfSuggestion(
             word=word,
             score=score,
-            count=word_to_count.get(word, 0),
+            count=word_to_count.get(word) or doc_count,
             document_count=doc_count,
         )
         for word, score, doc_count in candidates
