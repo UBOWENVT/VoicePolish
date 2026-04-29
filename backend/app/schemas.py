@@ -108,6 +108,21 @@ class PolishRequest(BaseModel):
     transcription_id: Optional[int] = None
 
 
+# =============================================================================
+# Vocabulary suggestion schemas (M5)
+# =============================================================================
+# Suggestions are derived from word_stats and not stored as their own resource.
+# Each suggestion is a (word, count) pair the user can choose to add to vocabulary.
+
+class VocabularySuggestion(BaseModel):
+    """One candidate word the user might want to add to their vocabulary."""
+    word: str
+    count: int
+    last_seen: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class PolishResponse(BaseModel):
     """Output of POST /api/polish."""
     polished_text: str

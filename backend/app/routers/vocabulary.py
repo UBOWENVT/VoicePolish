@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Vocabulary
-from app.schemas import VocabularyCreate, VocabularyRead
+from app.schemas import VocabularyCreate, VocabularyRead, VocabularySuggestion
+from app.services.vocab_analyzer import get_top_suggestions
 
 
 # -----------------------------------------------------------------------------
@@ -80,6 +81,26 @@ def list_vocabulary(
         .all()
     )
     return records
+
+
+# -----------------------------------------------------------------------------
+# GET /api/vocabulary/suggestions
+# -----------------------------------------------------------------------------
+# Returns the top N most-frequent words from word_stats that are NOT already
+# in the user's vocabulary. The user can then choose to add them.
+#
+# IMPORTANT: this route must be declared BEFORE /{vocabulary_id} below.
+# FastAPI matches routes in declaration order; if /{vocabulary_id} comes first,
+# the literal path "suggestions" gets matched as a path parameter and FastAPI
+# tries to parse it as an int, returning 422.
+# -----------------------------------------------------------------------------
+@router.get("/suggestions", response_model=List[VocabularySuggestion])
+def list_suggestions(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+):
+    """Return top frequent words not yet in vocabulary."""
+    return get_top_suggestions(db, limit=limit)
 
 
 # -----------------------------------------------------------------------------
