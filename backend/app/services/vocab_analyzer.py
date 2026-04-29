@@ -8,20 +8,22 @@ The current implementation is naive — count after stopword removal. M6 will
 add TF-IDF to surface "uniquely yours" terms. M7 will add LLM-based filtering.
 
 Key functions:
-    extract_words(text)            — pure: text -> list of meaningful words
-    update_word_stats(db, text)    — side effect: updates word_stats table
-    get_top_suggestions(db, n=20)  — read: top N words not yet in vocabulary
+    extract_words(text)              — pure: text -> list of meaningful words
+    update_word_stats(db, text)      — side effect: updates word_stats table
+    get_top_suggestions(db, n=20)    — read: top N by raw count (M5)
+    get_tfidf_suggestions(db, n=20)  — read: top N by TF-IDF score (M6)
 """
 
 from datetime import datetime
 from collections import Counter
+from dataclasses import dataclass
 
 import nltk
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from sqlalchemy.orm import Session
 
-from app.models import WordStat, Vocabulary
+from app.models import WordStat, Vocabulary, Transcription
 
 
 # -----------------------------------------------------------------------------
@@ -158,3 +160,115 @@ def get_top_suggestions(db: Session, limit: int = 20) -> list[WordStat]:
         .limit(limit)
         .all()
     )
+
+
+# =============================================================================
+# M6: TF-IDF based suggestions
+# =============================================================================
+
+@dataclass
+class TfidfSuggestion:
+    """
+    A word + its TF-IDF score + raw count, returned by get_tfidf_suggestions.
+
+    This is a plain dataclass (not an ORM model) because TF-IDF scores aren't
+    stored anywhere — they're computed on the fly from current data.
+    """
+    word: str
+    score: float       # TF-IDF score; higher = more "distinctive"
+    count: int         # raw occurrence count, for context in the UI
+    document_count: int  # how many transcriptions this word appears in
+
+
+def get_tfidf_suggestions(db: Session, limit: int = 20) -> list[TfidfSuggestion]:
+    """
+    Return top N words ranked by TF-IDF, excluding those already in vocabulary.
+
+    Algorithm:
+        1. Pull all transcriptions' raw_text from the DB
+        2. Run sklearn's TfidfVectorizer over the corpus
+        3. Sum each word's TF-IDF score across all documents
+        4. Sort by total score, drop vocabulary words, take top N
+
+    Why this is different from get_top_suggestions:
+        Raw counts surface words like "work" / "time" — high frequency but
+        also common everywhere. TF-IDF down-weights such words because they
+        appear in many documents (low IDF), letting genuinely distinctive
+        terms (RAG, embedding, etc.) rise to the top.
+    """
+    # Lazy import: sklearn is heavy (~50 MB), only load it when this function
+    # is actually called. Most requests don't hit TF-IDF, so the count-based
+    # path stays light.
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    import numpy as np
+
+    # ── Step 1: pull the corpus ──
+    # We use raw_text (not polished_text) — the user's actual spoken words,
+    # not the LLM's reformulation. This matches the M5 hook design.
+    transcriptions = db.query(Transcription.raw_text).all()
+    corpus = [t.raw_text for t in transcriptions if t.raw_text]
+
+    # Edge case: TF-IDF needs at least 2 documents to compute IDF meaningfully.
+    # With 0 or 1 documents, fall back to the count-based ranking so the user
+    # still gets something useful in the UI.
+    if len(corpus) < 2:
+        fallback = get_top_suggestions(db, limit=limit)
+        return [
+            TfidfSuggestion(word=w.word, score=float(w.count), count=w.count, document_count=1)
+            for w in fallback
+        ]
+
+    # ── Step 2: run TfidfVectorizer ──
+    # We feed it our stopword set so it strips fillers and common words.
+    # token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z\-]*[a-zA-Z]\b|\b[a-zA-Z]\b"
+    #   matches words of letters and internal hyphens, mirroring _is_word_like.
+    # lowercase=True merges "RAG" and "rag" — same as our M5 pipeline.
+    vectorizer = TfidfVectorizer(
+        lowercase=True,
+        stop_words=list(_STOPWORDS),
+        token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z\-]*[a-zA-Z]\b",
+        min_df=1,        # include words that appear in at least 1 document
+    )
+    # tfidf_matrix is a sparse matrix of shape (n_documents, n_unique_words).
+    # Each cell is the TF-IDF score of that word in that document.
+    tfidf_matrix = vectorizer.fit_transform(corpus)
+
+    # ── Step 3: aggregate scores across documents ──
+    # Sum each column → total score per word across all documents.
+    # We then squeeze the (1, n_words) result down to a 1-D array.
+    summed_scores = np.asarray(tfidf_matrix.sum(axis=0)).flatten()
+    feature_names = vectorizer.get_feature_names_out()
+
+    # Also count document frequency (how many docs each word appeared in)
+    # for display purposes. tfidf_matrix > 0 gives a binary matrix; sum per
+    # column = how many docs contained that word.
+    doc_freq = np.asarray((tfidf_matrix > 0).sum(axis=0)).flatten()
+
+    # ── Step 4: filter vocabulary, sort, take top N ──
+    existing_terms = {row.term for row in db.query(Vocabulary.term).all()}
+
+    # Build (word, score, doc_count) triples, drop already-in-vocab.
+    candidates = [
+        (feature_names[i], float(summed_scores[i]), int(doc_freq[i]))
+        for i in range(len(feature_names))
+        if feature_names[i] not in existing_terms
+    ]
+    # Sort by score descending
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    candidates = candidates[:limit]
+
+    # Look up raw count from word_stats for display (we have it cached there).
+    word_to_count = {
+        row.word: row.count
+        for row in db.query(WordStat).filter(WordStat.word.in_([c[0] for c in candidates])).all()
+    }
+
+    return [
+        TfidfSuggestion(
+            word=word,
+            score=score,
+            count=word_to_count.get(word, 0),
+            document_count=doc_count,
+        )
+        for word, score, doc_count in candidates
+    ]
