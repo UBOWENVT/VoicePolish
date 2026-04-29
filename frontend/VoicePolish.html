@@ -866,6 +866,9 @@
       <span id="finalText"></span><span class="interim" id="interimText"></span>
     </div>
 
+    <!-- M8: audio playback for the recorded clip (hidden until there's a recording) -->
+    <audio id="recordedAudio" controls style="display:none;width:100%;margin-bottom:18px;"></audio>
+
     <div class="waveform" id="waveform">
       <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
       <div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div>
@@ -1050,6 +1053,15 @@ let currentTranscriptionId = null;
 // M6: which ranking algorithm to use for suggestions ('count' or 'tfidf').
 let currentSuggestionMethod = 'count';
 
+// M8: MediaRecorder-based audio capture.
+// We replace the browser's SpeechRecognition (Web Speech API) with a two-step
+// flow: record audio with MediaRecorder, then upload to the backend's
+// /api/transcribe endpoint which calls OpenAI Whisper.
+let mediaRecorder = null;       // MediaRecorder instance, created per recording
+let mediaStream = null;         // raw mic stream from getUserMedia, kept so we can stop tracks later
+let recordedChunks = [];        // audio Blob chunks accumulated during recording
+let currentAudioBlob = null;    // the final assembled Blob after stop
+
 // Backend URL (set once, used everywhere).
 const API_BASE = 'http://localhost:8000';
 
@@ -1073,12 +1085,19 @@ window.onload = () => {
 };
 
 function checkSpeechSupport() {
-  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-    showError('speechError', 'Speech recognition is not supported in this browser. Please use Chrome or Edge.');
+  // M8: We now use MediaRecorder + backend Whisper instead of SpeechRecognition.
+  // Check that the browser supports the APIs we actually need.
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showError('speechError', 'This browser does not support microphone access (getUserMedia). Please use Chrome, Edge, or Firefox.');
     document.getElementById('recordBtn').disabled = true;
-  } else {
-    setStatus('ready', 'ready');
+    return;
   }
+  if (typeof MediaRecorder === 'undefined') {
+    showError('speechError', 'This browser does not support MediaRecorder. Please use a modern browser.');
+    document.getElementById('recordBtn').disabled = true;
+    return;
+  }
+  setStatus('ready', 'ready');
 }
 
 // ─── Recording ────────────────────────────────────────────────────────────────
@@ -1090,79 +1109,84 @@ function toggleRecording() {
   }
 }
 
-function startRecording() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  recognition = new SpeechRecognition();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  if (settings.lang) recognition.lang = settings.lang;
+// M8: MediaRecorder-based recording.
+// Async because getUserMedia returns a Promise (mic permission is async).
+async function startRecording() {
+  hideError('speechError');
 
-  recognition.onstart = () => {
-    isRecording = true;
-    setStatus('recording', 'recording');
-    document.getElementById('recordBtn').classList.add('recording');
-    document.getElementById('recordBtnText').textContent = 'Stop Recording';
-    document.getElementById('waveform').classList.add('active');
-    document.getElementById('transcriptBox').classList.add('active');
-    hideError('speechError');
+  // Reset state from any previous recording
+  recordedChunks = [];
+  currentAudioBlob = null;
+  document.getElementById('recordedAudio').style.display = 'none';
+
+  try {
+    // Ask the browser for a microphone stream. First time on a page, this
+    // shows the permission prompt. Subsequent calls reuse the granted permission.
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    // Most common error: user clicked "Block" on the permission prompt,
+    // or system-level mic access is denied.
+    showError('speechError', `Microphone access denied: ${err.message}`);
+    return;
+  }
+
+  // Build a MediaRecorder around the mic stream.
+  // Browsers vary on which mimeType they accept; webm/opus is the most widely
+  // supported. If unsupported, the constructor falls back to its default.
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : '';
+  mediaRecorder = mimeType
+    ? new MediaRecorder(mediaStream, { mimeType })
+    : new MediaRecorder(mediaStream);
+
+  // Fired periodically (and once at stop) with chunks of audio data.
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
   };
 
-  recognition.onresult = (e) => {
-    let interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      // e.results[i] is a SpeechRecognitionResult, which is a list of
-      // alternatives. Index [0] is the best-ranked alternative.
-      const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) {
-        finalTranscript += t + ' ';
-      } else {
-        interim += t;
-      }
+  // Fired once after stop() finishes flushing data.
+  mediaRecorder.onstop = () => {
+    // Assemble all chunks into one Blob, save it for upload (M8.3) and
+    // expose it via an Object URL so the user can preview by playing it back.
+    currentAudioBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+    const audioEl = document.getElementById('recordedAudio');
+    // revokeObjectURL on the previous src would be cleaner, but for a single
+    // recording lifecycle this is fine — the browser GCs unreferenced URLs.
+    audioEl.src = URL.createObjectURL(currentAudioBlob);
+    audioEl.style.display = 'block';
+
+    // Stop the underlying mic tracks so the browser stops showing the "recording"
+    // tab indicator. Without this, the red dot stays on the tab until the page closes.
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(t => t.stop());
+      mediaStream = null;
     }
-    updateTranscriptDisplay(interim);
+
+    // M8.2 stops here: we have an audio Blob, no transcript yet.
+    // M8.3 will add: upload currentAudioBlob to /api/transcribe.
+    showToast(`Recorded ${(currentAudioBlob.size / 1024).toFixed(1)} KB — ready (M8.3 will transcribe)`, 'success');
   };
 
-  recognition.onerror = (e) => {
-    const msgs = {
-      'not-allowed': 'Microphone access denied. Please allow mic permissions and try again.',
-      'no-speech': 'No speech detected. Try speaking louder or closer.',
-      'network': 'Network error. Check your connection.',
-      'aborted': null
-    };
-    const msg = msgs[e.error];
-    if (msg) showError('speechError', msg);
-    stopRecording();
-  };
-
-  recognition.onend = () => {
-    if (isRecording) recognition.start(); // keep going until manually stopped
-  };
-
-  recognition.start();
+  mediaRecorder.start();
+  isRecording = true;
+  setStatus('recording', 'recording');
+  document.getElementById('recordBtn').classList.add('recording');
+  document.getElementById('recordBtnText').textContent = 'Stop Recording';
+  document.getElementById('waveform').classList.add('active');
+  document.getElementById('transcriptBox').classList.add('active');
 }
 
 function stopRecording() {
-  isRecording = false;
-  if (recognition) {
-    recognition.onend = null;
-    recognition.stop();
-    recognition = null;
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();   // triggers ondataavailable (final) then onstop
   }
+  isRecording = false;
   setStatus('ready', 'ready');
   document.getElementById('recordBtn').classList.remove('recording');
   document.getElementById('recordBtnText').textContent = 'Start Recording';
   document.getElementById('waveform').classList.remove('active');
   document.getElementById('transcriptBox').classList.remove('active');
-  document.getElementById('interimText').textContent = '';
-
-  const hasFinal = finalTranscript.trim().length > 0;
-  document.getElementById('clearBtn').disabled = !hasFinal;
-  document.getElementById('polishBtn').disabled = !hasFinal;
-  if (hasFinal) {
-    document.getElementById('transcriptPlaceholder').style.display = 'none';
-    // Save this recording to the backend (fire-and-forget; don't block UI).
-    saveTranscriptionToBackend();
-  }
 }
 
 function updateTranscriptDisplay(interim) {
