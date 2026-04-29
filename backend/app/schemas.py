@@ -83,3 +83,36 @@ class VocabularyRead(VocabularyBase):
     # this schema, read attributes off the object instead of expecting a dict."
     # Without this, FastAPI cannot serialize SQLAlchemy objects automatically.
     model_config = ConfigDict(from_attributes=True)    
+
+
+# =============================================================================
+# Polish schemas
+# =============================================================================
+# Polish is an ACTION, not a stored resource. So instead of Base/Create/Read,
+# we have Request/Response — just an input shape and an output shape.
+
+from typing import Literal
+
+PolishMode = Literal["clean", "formal", "casual", "bullets", "summary"]
+
+
+class PolishRequest(BaseModel):
+    """Input for POST /api/polish."""
+    raw_text: str
+    mode: PolishMode = "clean"
+    # Optional: override the default model. Most callers will omit this.
+    model: Optional[str] = None
+    # Optional: if provided, the polish result will be written back to this
+    # transcription's polished_text + polish_mode fields. If omitted, polish
+    # only computes and returns the result without touching the database.
+    transcription_id: Optional[int] = None
+
+
+class PolishResponse(BaseModel):
+    """Output of POST /api/polish."""
+    polished_text: str
+    mode: PolishMode
+    model: str
+    # When transcription_id was given and the update succeeded, this echoes
+    # back the id so the client can confirm. None when no update happened.
+    transcription_id: Optional[int] = None
