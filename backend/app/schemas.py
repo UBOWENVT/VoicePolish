@@ -124,9 +124,12 @@ class VocabularySuggestion(BaseModel):
     count: int
     # Only populated when method="count"
     last_seen: Optional[datetime] = None
-    # Only populated when method="tfidf"
+    # Only populated when method="tfidf" or "llm"
     score: Optional[float] = None
     document_count: Optional[int] = None
+    # Only populated when method="llm"
+    replacement: Optional[str] = None
+    reason: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

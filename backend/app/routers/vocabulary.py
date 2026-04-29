@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from app.database import get_db
 from app.models import Vocabulary
 from app.schemas import VocabularyCreate, VocabularyRead, VocabularySuggestion
-from app.services.vocab_analyzer import get_top_suggestions, get_tfidf_suggestions
+from app.services.vocab_analyzer import get_top_suggestions, get_tfidf_suggestions, get_llm_suggestions
 
 
 # -----------------------------------------------------------------------------
@@ -30,6 +30,7 @@ from app.services.vocab_analyzer import get_top_suggestions, get_tfidf_suggestio
 class SuggestionMethod(str, Enum):
     count = "count"
     tfidf = "tfidf"
+    llm = "llm"
 
 
 # -----------------------------------------------------------------------------
@@ -121,6 +122,7 @@ def list_vocabulary(
 # `method` controls the ranking algorithm:
 #   - "count" (default): raw frequency, simple but biased toward common words
 #   - "tfidf": TF-IDF score, surfaces words distinctive to your corpus
+#   - "llm": TF-IDF candidates filtered by Claude, with replacement suggestions
 # -----------------------------------------------------------------------------
 @router.get("/suggestions", response_model=List[VocabularySuggestion])
 def list_suggestions(
@@ -129,6 +131,22 @@ def list_suggestions(
     db: Session = Depends(get_db),
 ):
     """Return top frequent words not yet in vocabulary, ranked by chosen method."""
+    if method == SuggestionMethod.llm:
+        # LLM path: returns LlmSuggestion dataclasses with replacement + reason.
+        # Note: this calls Claude, takes a few seconds, costs API tokens.
+        results = get_llm_suggestions(db, limit=limit)
+        return [
+            VocabularySuggestion(
+                word=r.term,
+                count=r.count,
+                score=r.score,
+                document_count=r.document_count,
+                replacement=r.replacement,
+                reason=r.reason,
+            )
+            for r in results
+        ]
+
     if method == SuggestionMethod.tfidf:
         # TF-IDF path: returns TfidfSuggestion dataclasses with score + doc_count.
         results = get_tfidf_suggestions(db, limit=limit)
