@@ -8,6 +8,7 @@ Endpoints:
 """
 
 from typing import List
+from enum import Enum
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -15,7 +16,20 @@ from sqlalchemy.exc import IntegrityError
 from app.database import get_db
 from app.models import Vocabulary
 from app.schemas import VocabularyCreate, VocabularyRead, VocabularySuggestion
-from app.services.vocab_analyzer import get_top_suggestions
+from app.services.vocab_analyzer import get_top_suggestions, get_tfidf_suggestions
+
+
+# -----------------------------------------------------------------------------
+# Enum for the `method` query parameter on /suggestions.
+# Inheriting from str makes Enum members usable as plain strings (in JSON,
+# in URL params, in equality checks against str literals). FastAPI sees the
+# Enum and:
+#   1. Validates the URL param value (rejects unknown methods with a 422)
+#   2. Renders a dropdown in /docs with the allowed values
+# -----------------------------------------------------------------------------
+class SuggestionMethod(str, Enum):
+    count = "count"
+    tfidf = "tfidf"
 
 
 # -----------------------------------------------------------------------------
@@ -103,13 +117,34 @@ def list_vocabulary(
 # FastAPI matches routes in declaration order; if /{vocabulary_id} comes first,
 # the literal path "suggestions" gets matched as a path parameter and FastAPI
 # tries to parse it as an int, returning 422.
+#
+# `method` controls the ranking algorithm:
+#   - "count" (default): raw frequency, simple but biased toward common words
+#   - "tfidf": TF-IDF score, surfaces words distinctive to your corpus
 # -----------------------------------------------------------------------------
 @router.get("/suggestions", response_model=List[VocabularySuggestion])
 def list_suggestions(
     limit: int = 20,
+    method: SuggestionMethod = SuggestionMethod.count,
     db: Session = Depends(get_db),
 ):
-    """Return top frequent words not yet in vocabulary."""
+    """Return top frequent words not yet in vocabulary, ranked by chosen method."""
+    if method == SuggestionMethod.tfidf:
+        # TF-IDF path: returns TfidfSuggestion dataclasses with score + doc_count.
+        results = get_tfidf_suggestions(db, limit=limit)
+        return [
+            VocabularySuggestion(
+                word=r.word,
+                count=r.count,
+                score=r.score,
+                document_count=r.document_count,
+                # last_seen not applicable in TF-IDF path; left as None
+            )
+            for r in results
+        ]
+
+    # Default: count path. Returns WordStat ORM objects directly; Pydantic's
+    # from_attributes=True picks the matching fields.
     return get_top_suggestions(db, limit=limit)
 
 

@@ -109,16 +109,24 @@ class PolishRequest(BaseModel):
 
 
 # =============================================================================
-# Vocabulary suggestion schemas (M5)
+# Vocabulary suggestion schemas (M5 + M6)
 # =============================================================================
-# Suggestions are derived from word_stats and not stored as their own resource.
-# Each suggestion is a (word, count) pair the user can choose to add to vocabulary.
+# Suggestions are derived from word_stats / TF-IDF, not stored as their own
+# resource. The schema is a SUPERSET of fields used by either ranking method:
+#   - count + last_seen: populated when method="count"
+#   - score + document_count: populated when method="tfidf"
+# Fields irrelevant to the chosen method come back as null. This keeps the
+# frontend's parsing logic simple (one shape) at the cost of a few null fields.
 
 class VocabularySuggestion(BaseModel):
     """One candidate word the user might want to add to their vocabulary."""
     word: str
     count: int
-    last_seen: datetime
+    # Only populated when method="count"
+    last_seen: Optional[datetime] = None
+    # Only populated when method="tfidf"
+    score: Optional[float] = None
+    document_count: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 
