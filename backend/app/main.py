@@ -15,7 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
 from app import models  # noqa: F401  -- import needed so Base knows about the models
-from app.routers import transcriptions
+from app.routers import transcriptions, vocabulary
+
 
 # -----------------------------------------------------------------------------
 # Create database tables on startup.
@@ -83,3 +84,4 @@ def root():
 # on the router itself, so nothing to add here.
 # -----------------------------------------------------------------------------
 app.include_router(transcriptions.router)
+app.include_router(vocabulary.router)

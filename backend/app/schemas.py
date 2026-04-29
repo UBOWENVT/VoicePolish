@@ -49,3 +49,37 @@ class TranscriptionRead(TranscriptionBase):
     # this schema, read attributes off the object instead of expecting a dict."
     # Without this, FastAPI cannot serialize SQLAlchemy objects automatically.
     model_config = ConfigDict(from_attributes=True)
+
+
+# =============================================================================
+# Vocabulary schemas
+# =============================================================================
+
+class VocabularyBase(BaseModel):
+    """Fields shared between create and read schemas."""
+    term: str
+    replacement: str
+    source: Optional[str] = "manual"
+
+
+class VocabularyCreate(VocabularyBase):
+    """
+    Schema for POST /api/vocabulary request body.
+    Inherits all fields from Base. Notice `id` and `created_at` are NOT here —
+    the client is not allowed to set them.
+    """
+    pass
+
+
+class VocabularyRead(VocabularyBase):
+    """
+    Schema for API responses.
+    Adds server-generated fields: id, created_at.
+    """
+    id: int
+    created_at: datetime
+
+    # Tell Pydantic: "When converting a SQLAlchemy Vocabulary object into
+    # this schema, read attributes off the object instead of expecting a dict."
+    # Without this, FastAPI cannot serialize SQLAlchemy objects automatically.
+    model_config = ConfigDict(from_attributes=True)    
