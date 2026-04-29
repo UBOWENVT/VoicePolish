@@ -66,3 +66,13 @@ def require_anthropic_key() -> str:
             "the server."
         )
     return ANTHROPIC_API_KEY
+
+
+def require_openai_key() -> str:
+    """Return OPENAI_API_KEY, or raise a clear error if it's not set."""
+    if not OPENAI_API_KEY:
+        raise RuntimeError(
+            "OPENAI_API_KEY is not set. Add it to backend/.env and restart "
+            "the server."
+        )
+    return OPENAI_API_KEY

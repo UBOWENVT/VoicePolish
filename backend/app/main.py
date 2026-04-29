@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base
 from app import models  # noqa: F401  -- import needed so Base knows about the models
-from app.routers import transcriptions, vocabulary, polish
+from app.routers import transcriptions, vocabulary, polish, transcribe
 
 
 # -----------------------------------------------------------------------------
@@ -86,3 +86,4 @@ def root():
 app.include_router(transcriptions.router)
 app.include_router(vocabulary.router)
 app.include_router(polish.router)
+app.include_router(transcribe.router)
