@@ -10,6 +10,7 @@ Endpoints:
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.database import get_db
 from app.models import Vocabulary
@@ -51,7 +52,16 @@ def create_vocabulary(
     new_record = Vocabulary(**payload.model_dump())
 
     db.add(new_record)        # Stage the INSERT
-    db.commit()               # Actually run it — now the row exists in DB
+    try:
+        db.commit()           # Actually run it — now the row exists in DB
+    except IntegrityError:
+        # Most likely cause: term already exists (UNIQUE constraint violation).
+        # Roll back so the session is usable for subsequent queries.
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Term {payload.term!r} already exists in vocabulary",
+        )
     db.refresh(new_record)    # Pull back server-generated fields (id, created_at)
 
     return new_record
@@ -126,3 +136,26 @@ def get_vocabulary(
             detail=f"Vocabulary {vocabulary_id} not found",
         )
     return record
+
+
+# -----------------------------------------------------------------------------
+# DELETE /api/vocabulary/{vocabulary_id}
+# -----------------------------------------------------------------------------
+# Removes a vocabulary entry. Returns 204 No Content on success — the standard
+# REST convention for deletion (the caller already knows the id, no body needed).
+# -----------------------------------------------------------------------------
+@router.delete("/{vocabulary_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_vocabulary(
+    vocabulary_id: int,
+    db: Session = Depends(get_db),
+):
+    """Delete a vocabulary entry by id."""
+    record = db.query(Vocabulary).filter(Vocabulary.id == vocabulary_id).first()
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Vocabulary {vocabulary_id} not found",
+        )
+    db.delete(record)
+    db.commit()
+    # No return value — 204 means "success, no body".

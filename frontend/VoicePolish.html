@@ -1020,7 +1020,8 @@ let settings = {
   lang: ''
 };
 
-// Dictionary: [{from, to}]
+// Dictionary: array of {id, term, replacement} loaded from backend.
+// Stored on the server (in the `vocabulary` table), not in localStorage.
 let dictionary = [];
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -1150,9 +1151,10 @@ function clearTranscript() {
 function applyDictionary(text) {
   let result = text;
   dictionary.forEach(entry => {
-    if (!entry.from) return;
-    const regex = new RegExp(entry.from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    result = result.replace(regex, entry.to);
+    if (!entry.term) return;
+    const escaped = entry.term.replace(/[.*+?^${}()|[\]\\]/g, c => '\\' + c);
+    const regex = new RegExp(escaped, 'gi');
+    result = result.replace(regex, entry.replacement);
   });
   return result;
 }
@@ -1257,9 +1259,16 @@ function onProviderChange() {
 }
 
 // ─── Dictionary ───────────────────────────────────────────────────────────────
-function loadDict() {
-  const saved = localStorage.getItem('vp_dict');
-  if (saved) dictionary = JSON.parse(saved);
+// Load dictionary from backend's /api/vocabulary endpoint.
+async function loadDict() {
+  try {
+    const res = await fetch(`${API_BASE}/api/vocabulary?limit=200`);
+    if (!res.ok) throw new Error(res.statusText);
+    dictionary = await res.json();
+  } catch (err) {
+    console.warn('Failed to load dictionary:', err);
+    dictionary = [];
+  }
   renderDictList();
 }
 
@@ -1269,33 +1278,74 @@ function renderDictList() {
     list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px 0;">No entries yet.</div>';
     return;
   }
-  list.innerHTML = dictionary.map((entry, i) => `
+  list.innerHTML = dictionary.map(entry => `
     <div class="dict-item">
-      <span class="dict-from">${escHtml(entry.from)}</span>
+      <span class="dict-from">${escHtml(entry.term)}</span>
       <span class="dict-arrow">→</span>
-      <span class="dict-to">${escHtml(entry.to)}</span>
-      <button class="dict-del" onclick="removeDictEntry(${i})">×</button>
+      <span class="dict-to">${escHtml(entry.replacement)}</span>
+      <button class="dict-del" onclick="removeDictEntry(${entry.id})">×</button>
     </div>
   `).join('');
 }
 
-function addDictEntry() {
-  const from = document.getElementById('dictFrom').value.trim();
-  const to = document.getElementById('dictTo').value.trim();
-  if (!from || !to) { showToast('Both fields are required', 'error'); return; }
-  dictionary.push({ from, to });
-  document.getElementById('dictFrom').value = '';
-  document.getElementById('dictTo').value = '';
-  renderDictList();
+// Add a new entry to the dictionary by calling POST /api/vocabulary.
+// On success, refresh the dictionary list and the suggestions list (since
+// the new term should disappear from suggestions).
+async function addDictEntry() {
+  const term = document.getElementById('dictFrom').value.trim();
+  const replacement = document.getElementById('dictTo').value.trim();
+  if (!term || !replacement) {
+    showToast('Both fields are required', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/vocabulary`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ term, replacement, source: 'manual' }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      // 409 Conflict = term already exists. Treat as a friendly toast,
+      // not a scary error.
+      if (res.status === 409) {
+        showToast(`"${term}" is already in the dictionary`, 'error');
+        return;
+      }
+      throw new Error(err.detail || res.statusText);
+    }
+    const created = await res.json();
+    dictionary.push(created);
+    document.getElementById('dictFrom').value = '';
+    document.getElementById('dictTo').value = '';
+    renderDictList();
+    loadSuggestions();   // refresh: this term should now be excluded
+  } catch (err) {
+    showToast(`Add failed: ${err.message}`, 'error');
+  }
 }
 
-function removeDictEntry(i) {
-  dictionary.splice(i, 1);
-  renderDictList();
+// Remove an entry by calling DELETE /api/vocabulary/{id}.
+// id is the database id, NOT an array index — different from the old localStorage version.
+async function removeDictEntry(id) {
+  try {
+    const res = await fetch(`${API_BASE}/api/vocabulary/${id}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || res.statusText);
+    }
+    dictionary = dictionary.filter(e => e.id !== id);
+    renderDictList();
+    loadSuggestions();   // the deleted term may now reappear as a suggestion
+  } catch (err) {
+    showToast(`Delete failed: ${err.message}`, 'error');
+  }
 }
 
+// Kept for compatibility with the existing "Save Dictionary" button: now
+// it just closes the panel since changes are persisted immediately on add/delete.
 function saveDict() {
-  localStorage.setItem('vp_dict', JSON.stringify(dictionary));
   closePanel('dict');
   showToast('Dictionary saved', 'success');
 }
