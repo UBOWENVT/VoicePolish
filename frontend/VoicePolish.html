@@ -1190,6 +1190,12 @@ function stopRecording() {
 
 // M8.3: upload the recorded Blob to the backend, get text from Whisper,
 // then run the original "save to transcriptions" pipeline.
+//
+// KNOWN ISSUE: Whisper hallucinates on silent/near-silent audio, returning
+// text like "Thanks for watching!" or training-data artifacts in any language.
+// This is a model-level limitation (see https://github.com/openai/whisper/discussions/679).
+// Best fix is client-side VAD (Voice Activity Detection) before upload —
+// deferred to a future polish pass to keep this project on track for deployment.
 async function transcribeAndSave() {
   if (!currentAudioBlob || currentAudioBlob.size === 0) {
     showToast('No audio to transcribe', 'error');
