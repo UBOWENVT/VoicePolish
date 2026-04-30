@@ -112,7 +112,7 @@ Dockerfile.
 - [x] **M9.1** — Backend dockerized
 - [x] **M9.2** — Backend deployed to Railway (with persistent volume for SQLite)
 - [x] **M9.3** — Frontend deployed to Vercel (env-aware API_BASE)
-- [ ] **M9.4** — Production CORS hardening
+- [x] **M9.4** — Production CORS hardening (env-driven origin whitelist)
 
 ## Tech Stack
 
