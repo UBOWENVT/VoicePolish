@@ -1060,8 +1060,14 @@ let mediaStream = null;         // raw mic stream from getUserMedia, kept so we 
 let recordedChunks = [];        // audio Blob chunks accumulated during recording
 let currentAudioBlob = null;    // the final assembled Blob after stop
 
-// Backend URL (set once, used everywhere).
-const API_BASE = 'http://localhost:8000';
+// Backend URL. Auto-switches between local dev and the Railway-hosted
+// production backend based on the page's hostname. Local dev (localhost
+// or 127.0.0.1) hits your local uvicorn; everything else (including the
+// deployed Vercel page) hits Railway.
+const API_BASE =
+  (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
+    ? 'http://localhost:8000'
+    : 'https://voicepolish-production-4b7c.up.railway.app';
 
 // Settings
 let settings = {
