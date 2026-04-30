@@ -13,6 +13,8 @@ Then visit:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import os
+
 from app.database import engine, Base
 from app import models  # noqa: F401  -- import needed so Base knows about the models
 from app.routers import transcriptions, vocabulary, polish, transcribe
@@ -39,14 +41,26 @@ app = FastAPI(
 # -----------------------------------------------------------------------------
 # CORS middleware.
 # Browsers block JavaScript from calling APIs on a different origin (domain/port)
-# unless the server explicitly allows it. Our frontend runs from a file://
-# URL or localhost, and our backend runs on localhost:8000 — different origin.
-# So we tell FastAPI: "Allow any origin to call us during development."
-# In production we would lock this down to specific domains.
+# unless the server explicitly allows it. Production tightens this to specific
+# domains via the ALLOWED_ORIGINS env var (comma-separated). For local dev
+# (env var unset) we fall back to allowing localhost dev servers.
 # -----------------------------------------------------------------------------
+_default_dev_origins = [
+    "http://localhost:5500",
+    "http://127.0.0.1:5500",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+_env_origins = os.getenv("ALLOWED_ORIGINS", "").strip()
+allowed_origins = (
+    [o.strip() for o in _env_origins.split(",") if o.strip()]
+    if _env_origins
+    else _default_dev_origins
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],           # dev-only; tighten in production
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
