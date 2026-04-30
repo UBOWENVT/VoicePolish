@@ -1,0 +1,59 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .dockerignore — files/folders excluded from the build context
+# ─────────────────────────────────────────────────────────────────────────────
+# Anything matching these patterns is NOT sent to the Docker daemon during
+# `docker build`, and therefore won't end up in the image. Two big wins:
+#   1. Faster builds (less data to transfer)
+#   2. Security: secrets like .env never get baked into the image
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Virtual environment — must NOT go in the image. The image installs its own
+# clean dependencies via pip. Including venv would balloon image size by
+# hundreds of MB and might include OS-specific binaries that don't work in
+# the Linux container.
+venv/
+.venv/
+env/
+
+# Python bytecode caches — recreated at runtime, no need to ship them
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# SQLite database file — local dev data shouldn't ship to production. The
+# container's database lives on a mounted volume in production (see Railway
+# setup in M9.2).
+*.db
+*.db-journal
+voicepolish.db
+
+# Environment files — CRITICAL to exclude. .env contains API keys; if it
+# went into the image, anyone who pulled the image would have your keys.
+# Production gets env vars injected at runtime by Railway.
+.env
+.env.local
+.env.*.local
+
+# IDE / editor metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Git metadata — not needed inside the image
+.git/
+.gitignore
+
+# Test / build artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Documentation source files (not needed at runtime)
+README.md
+*.md
