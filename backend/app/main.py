@@ -77,6 +77,41 @@ def root():
 
 
 # -----------------------------------------------------------------------------
+# Temporary debug endpoint (M9.2): inspect filesystem + DB location at runtime.
+# Useful for verifying that Railway volumes mount where we expect. Remove once
+# persistence is verified.
+# -----------------------------------------------------------------------------
+@app.get("/debug-paths")
+def debug_paths():
+    import os
+    from app.database import DATABASE_URL
+
+    def stat(p):
+        try:
+            s = os.stat(p)
+            return {"exists": True, "size": s.st_size, "is_dir": os.path.isdir(p)}
+        except FileNotFoundError:
+            return {"exists": False}
+        except Exception as e:
+            return {"error": str(e)}
+
+    info = {
+        "DATABASE_URL": DATABASE_URL,
+        "cwd": os.getcwd(),
+        "/data": stat("/data"),
+        "/data/voicepolish.db": stat("/data/voicepolish.db"),
+        "/app": stat("/app"),
+        "/app/voicepolish.db": stat("/app/voicepolish.db"),
+    }
+    if info["/data"].get("exists") and info["/data"].get("is_dir"):
+        try:
+            info["/data listing"] = os.listdir("/data")
+        except Exception as e:
+            info["/data listing"] = f"error: {e}"
+    return info
+
+
+# -----------------------------------------------------------------------------
 # Mount routers
 # -----------------------------------------------------------------------------
 # Each router is a self-contained group of routes in its own file.
