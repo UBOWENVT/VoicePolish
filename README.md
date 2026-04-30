@@ -7,7 +7,8 @@ Over time, VoicePolish learns the domain-specific terms you use most and
 suggests adding them to your personal dictionary using a three-stage pipeline
 (NLTK → TF-IDF → LLM).
 
-**🔗 Live demo:** https://voicepolish-production-4b7c.up.railway.app/docs *(backend; frontend coming in M9.3)*
+**🔗 Live demo:** https://voice-polish-nine.vercel.app/
+**🔗 Backend API docs:** https://voicepolish-production-4b7c.up.railway.app/docs
 
 ---
 
@@ -109,9 +110,9 @@ Dockerfile.
 - [x] **M7** — Vocabulary analysis v3: LLM-assisted curation with grounding
 - [x] **M8** — Whisper integration (multipart audio upload, full pipeline)
 - [x] **M9.1** — Backend dockerized
-- [x] **M9.2** — Backend deployed to Railway
-- [ ] **M9.3** — Frontend deployed (Vercel/Netlify)
-- [ ] **M9.4** — Production CORS hardening + end-to-end smoke test
+- [x] **M9.2** — Backend deployed to Railway (with persistent volume for SQLite)
+- [x] **M9.3** — Frontend deployed to Vercel (env-aware API_BASE)
+- [ ] **M9.4** — Production CORS hardening
 
 ## Tech Stack
 
