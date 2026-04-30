@@ -10,6 +10,8 @@ Three things are exported:
     Base           — the class every model will inherit from
 """
 
+import os
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
@@ -20,16 +22,16 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 # SQLAlchemy connects to any database through a URL string. The format is:
 #     dialect+driver://user:password@host:port/dbname
 #
-# For SQLite (a file-based database), we skip the user/host stuff and just
-# point at a file:
+# For SQLite (a file-based database):
 #     sqlite:///./voicepolish.db    <- three slashes = relative path
 #     sqlite:////absolute/path.db   <- four slashes = absolute path
 #
-# The ".db" file will be created automatically on first run. The "./" means
-# "relative to the current working directory when uvicorn starts", which for
-# us is the backend/ folder. So the database file lands at backend/voicepolish.db.
+# The URL is overridable via the DATABASE_URL env var so production deployments
+# can point at a mounted volume (Railway) or a real Postgres later. Locally,
+# the default "./voicepolish.db" lands the file in backend/ when uvicorn starts
+# from there — same as before.
 # -----------------------------------------------------------------------------
-DATABASE_URL = "sqlite:///./voicepolish.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./voicepolish.db")
 
 
 # -----------------------------------------------------------------------------
