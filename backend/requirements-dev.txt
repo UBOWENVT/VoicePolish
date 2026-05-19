@@ -1,0 +1,6 @@
+# Dev/CI-only dependencies. Not bundled into the production Docker image.
+# Install locally with:  pip install -r requirements-dev.txt
+# CI installs both this and requirements.txt.
+
+pytest==8.3.4
+ruff==0.8.4

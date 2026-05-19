@@ -19,7 +19,6 @@ from datetime import datetime
 from collections import Counter
 from dataclasses import dataclass
 
-import nltk
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from sqlalchemy.orm import Session

@@ -1,0 +1,40 @@
+# Ruff config for VoicePolish backend.
+# Goal: catch real bugs (undefined names, unused imports) without nitpicking style.
+# Run locally with:
+#     ruff check .
+
+# Target Python version — must match runtime.
+target-version = "py312"
+
+# Line length — match Black's default. Used only by the lint pass we enable.
+line-length = 100
+
+[lint]
+# Minimal rule set — only the families that catch REAL bugs at high signal.
+#   E   = pycodestyle errors (real syntax/whitespace bugs)
+#   F   = pyflakes (undefined names, unused imports — the most useful family)
+#
+# Deliberately NOT enabling:
+#   I (isort)    — VoicePolish groups imports by purpose (stdlib / third-party /
+#                  local) with intentional blank lines; isort fighting that
+#                  helps no one.
+#   B (bugbear)  — Reports B008 on FastAPI's `Depends(...)` / `File(...)` /
+#                  `Form(...)` default-arg pattern, which is the framework
+#                  idiom, not a bug. Re-enable with `extend-select = ["B"]`
+#                  + `ignore = ["B008"]` if you want bugbear's other rules.
+select = ["E", "F"]
+
+# Ignore specific noisy rules:
+#   E501 — line too long. Re-enable once a formatter is adopted.
+#   E402 — module-level import not at top of file. VoicePolish puts a few
+#          imports below section headers for readability (e.g. lazy logger
+#          imports under "M7" comment block). Worth keeping.
+ignore = ["E501", "E402"]
+
+# Files we never want to lint.
+exclude = [
+    "venv",
+    ".venv",
+    "__pycache__",
+    "voicepolish.db",
+]
