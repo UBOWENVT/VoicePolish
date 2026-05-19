@@ -158,12 +158,53 @@ previous layer so users always see useful results.
 
 ## Local Development
 
-### Prerequisites
-- Python 3.12+
-- Modern browser (Chrome/Edge/Firefox)
-- OpenAI API key, Anthropic API key
+Two paths: a one-command Docker Compose stack (recommended) and a bare
+uvicorn setup for fast iteration on backend code without rebuilding images.
 
-### Backend setup
+### Prerequisites
+- **For the Docker path**: Docker Desktop
+- **For the bare path**: Python 3.12+, OpenAI API key, Anthropic API key
+- Modern browser (Chrome/Edge/Firefox)
+
+### Path A — Docker Compose (recommended, mirrors production)
+
+One command starts the whole stack — multi-stage Dockerized FastAPI backend
+behind an nginx reverse proxy that also serves the static frontend. Mirrors
+the production topology (Vercel + Railway) on a single local host.
+
+```powershell
+# 1. Copy .env.example to .env and add your API keys
+copy backend\.env.example backend\.env
+notepad backend\.env   # add OPENAI_API_KEY and ANTHROPIC_API_KEY
+
+# 2. Start the stack (first run builds the backend image; subsequent runs reuse it)
+docker compose up
+```
+
+Then open **http://localhost:8080** in your browser.
+
+Useful commands:
+```powershell
+docker compose up -d        # start detached
+docker compose logs -f      # follow logs from all services
+docker compose down         # stop (keeps SQLite data)
+docker compose down -v      # stop and wipe SQLite data
+docker compose build        # force rebuild after Dockerfile changes
+```
+
+The SQLite database lives in a named volume (`voicepolish_data`) mounted at
+`/data/voicepolish.db` inside the container — same path Railway uses in
+production, so the local stack exercises the same code path.
+
+**Note on `depends_on`:** Compose starts the backend container before nginx,
+but doesn't wait for FastAPI to finish booting. On the first request after
+`up`, you may see a brief 502 from nginx if the backend is still loading
+NLTK data. Refresh after a few seconds.
+
+### Path B — Bare uvicorn (faster iteration on backend code)
+
+Skip Docker for tight inner loops where you're editing backend code and want
+`--reload` behavior without rebuilding images.
 
 ```powershell
 cd backend
@@ -172,19 +213,18 @@ python -m venv venv
 pip install -r requirements.txt
 python -c "import nltk; nltk.download('punkt_tab'); nltk.download('stopwords')"
 
-# Create .env from template
 copy .env.example .env
-# Edit .env — add OPENAI_API_KEY and ANTHROPIC_API_KEY
+notepad .env           # add OPENAI_API_KEY and ANTHROPIC_API_KEY
 
 uvicorn app.main:app --reload
 ```
 
 API at **http://localhost:8000** · Docs at **http://localhost:8000/docs**
 
-### Frontend
-
-Open `frontend/VoicePolish.html` via a local HTTP server (file:// won't work
-for mic permissions in some browsers):
+For the frontend in this mode, you also need a separate static server **and**
+you need to switch `API_BASE` in `frontend/VoicePolish.html` back to the
+explicit `http://localhost:8000` (see the comment at the `const API_BASE`
+declaration).
 
 ```powershell
 cd frontend
@@ -192,14 +232,6 @@ python -m http.server 5500
 ```
 
 Then visit http://localhost:5500/VoicePolish.html
-
-### Docker (production-equivalent)
-
-```powershell
-cd backend
-docker build -t voicepolish-backend .
-docker run -p 8000:8000 --env-file .env voicepolish-backend
-```
 
 ---
 

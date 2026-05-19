@@ -1060,13 +1060,23 @@ let mediaStream = null;         // raw mic stream from getUserMedia, kept so we 
 let recordedChunks = [];        // audio Blob chunks accumulated during recording
 let currentAudioBlob = null;    // the final assembled Blob after stop
 
-// Backend URL. Auto-switches between local dev and the Railway-hosted
-// production backend based on the page's hostname. Local dev (localhost
-// or 127.0.0.1) hits your local uvicorn; everything else (including the
-// deployed Vercel page) hits Railway.
+// API_BASE — where the browser sends API calls.
+//
+// Production (deployed Vercel page): goes straight to Railway over HTTPS.
+//
+// Local dev with Docker Compose (default): nginx on :8080 reverse-proxies
+// /api/* and /health to the backend container. `location.origin` evaluates
+// to whatever URL/port the page was loaded from (e.g. http://localhost:8080),
+// so the same code works regardless of which port nginx is bound to.
+//
+// Local dev with bare uvicorn (no Docker, dev convenience): if you're running
+// uvicorn directly and serving the HTML via `python -m http.server`, the page
+// loads from :5500 but backend lives at :8000. Comment out the
+// `location.origin` line and uncomment the explicit localhost:8000 line.
 const API_BASE =
   (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-    ? 'http://localhost:8000'
+    ? location.origin
+    // ? 'http://localhost:8000'   // <-- uncomment if running bare uvicorn
     : 'https://voicepolish-production-4b7c.up.railway.app';
 
 // Settings
