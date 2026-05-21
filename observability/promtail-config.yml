@@ -1,0 +1,42 @@
+# Promtail configuration — scrapes Docker container logs and ships to Loki.
+# Reference: https://grafana.com/docs/loki/latest/send-data/promtail/
+#
+# Strategy:
+#   - Use the Docker service discovery (docker_sd_configs) so any new container
+#     is picked up automatically; no per-container config needed.
+#   - Label every stream with compose service + container name + image so
+#     LogQL queries can scope to a specific app cleanly.
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0     # 0 = no gRPC; reduces attack surface for the lab
+  log_level: warn
+
+positions:
+  # Tracks how far Promtail has read in each log file. Survives restarts.
+  filename: /tmp/positions.yaml
+
+clients:
+  # Single Loki endpoint inside the Compose network — service name "loki".
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker-containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Take the compose project label and expose it as `compose_project`.
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: 'compose_project'
+      # Compose service name (e.g. "backend", "nginx"). This is the primary
+      # query label.
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: 'compose_service'
+      # Container name (strip the leading "/" Docker adds).
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: 'container'
+      # Image name (without tag) — handy for filtering by what's running.
+      - source_labels: ['__meta_docker_container_log_stream']
+        target_label: 'stream'

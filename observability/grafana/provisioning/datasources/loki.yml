@@ -1,0 +1,19 @@
+# Grafana datasource provisioning — automatically registers Loki on startup.
+# Reference: https://grafana.com/docs/grafana/latest/administration/provisioning/#data-sources
+#
+# Without this, you'd have to click through the UI to add the datasource every
+# time the volume gets wiped. With this, Loki is ready the moment Grafana boots.
+
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100        # service name inside the compose network
+    isDefault: true
+    editable: false              # config-as-code: don't allow UI edits to drift
+    jsonData:
+      maxLines: 1000
+      # Derived fields could turn trace IDs in logs into links, but we don't
+      # have tracing yet — leave empty.

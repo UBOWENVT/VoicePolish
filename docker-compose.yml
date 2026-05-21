@@ -1,21 +1,24 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # VoicePolish — Multi-Service Local Deployment
 # ─────────────────────────────────────────────────────────────────────────────
-# Two services collapsed onto one host to mirror the production topology
-# (Vercel for the frontend + Railway for the dockerized backend).
+# Production-shape topology collapsed onto one host:
 #
-#   nginx    — reverse proxy + static file server  (exposes 8080 to host)
-#   backend  — FastAPI on uvicorn                  (NOT exposed to host;
-#                                                   only nginx can reach it)
+#   nginx     — reverse proxy + static file server   (host:8080)
+#   backend   — FastAPI on uvicorn                   (internal only)
+#   loki      — log storage + query engine           (internal only)
+#   promtail  — log collector (Docker SD)            (internal only)
+#   grafana   — dashboards + alerting UI             (host:3000)
 #
 # Usage:
-#   docker compose up           # build images on first run, start the stack
-#   docker compose up -d        # same, detached
-#   docker compose logs -f      # follow logs
-#   docker compose down         # stop containers (keeps the volume)
-#   docker compose down -v      # stop AND wipe the SQLite volume
+#   docker compose up              # build + start the whole stack
+#   docker compose up -d           # detached
+#   docker compose logs -f         # follow logs
+#   docker compose down            # stop, keep volumes
+#   docker compose down -v         # stop AND wipe SQLite + Loki + Grafana data
 #
-# After `up`, the app is at:  http://localhost:8080
+# After `up`:
+#   - App:      http://localhost:8080
+#   - Grafana:  http://localhost:3000  (admin / see GRAFANA_ADMIN_PASSWORD)
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -23,61 +26,113 @@ services:
   # ─── Backend ────────────────────────────────────────────────────────────────
   backend:
     build:
-      context: ./backend           # Dockerfile lives in ./backend/
+      context: ./backend
       dockerfile: Dockerfile
     image: voicepolish-backend:local
     container_name: voicepolish-backend
 
-    # Read API keys from the same .env you already use for local dev.
     env_file:
       - ./backend/.env
 
-    # Override DATABASE_URL to point at the mounted volume — same path
-    # ("/data/voicepolish.db") that Railway uses in production, so the
-    # local stack exercises the same code path.
     environment:
       DATABASE_URL: "sqlite:////data/voicepolish.db"
-      # CORS isn't strictly needed since nginx makes everything same-origin,
-      # but we set it explicitly to match production's hardened config.
       ALLOWED_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080"
+      # LOG_LEVEL picked up by logging_config.py. INFO captures llm.call events.
+      LOG_LEVEL: "INFO"
 
-    # Named volume for SQLite. Lives inside Docker's storage, not the repo.
-    # `docker compose down -v` wipes it; plain `down` keeps it.
     volumes:
       - voicepolish_data:/data
-
-    # NO `ports:` block here — the backend is NOT directly reachable from the
-    # host. The nginx container talks to it over Compose's internal network
-    # using the service name "backend" as the DNS hostname.
 
     restart: unless-stopped
 
 
   # ─── Nginx (reverse proxy + static frontend) ────────────────────────────────
   nginx:
-    image: nginx:alpine            # public image, no Dockerfile of our own
+    image: nginx:alpine
     container_name: voicepolish-nginx
 
     ports:
-      - "8080:80"                  # host 8080 → container 80
+      - "8080:80"
 
     volumes:
-      # Mount the frontend directory read-only into nginx's web root.
       - ./frontend:/usr/share/nginx/html:ro
-      # Mount our custom server config. nginx's default config includes any
-      # *.conf in /etc/nginx/conf.d/, so dropping default.conf in there
-      # replaces the stock "welcome to nginx" config.
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
 
     depends_on:
-      - backend                    # start backend first (doesn't wait for
-                                   # readiness — see README note)
+      - backend
+
+    restart: unless-stopped
+
+
+  # ─── Loki (log storage + query engine) ──────────────────────────────────────
+  # Single-binary deployment, on-disk storage. Internal-only: Grafana hits it
+  # over the Compose network, nothing outside this host can reach it.
+  loki:
+    image: grafana/loki:3.7.2
+    container_name: voicepolish-loki
+
+    command: -config.file=/etc/loki/loki-config.yml
+
+    volumes:
+      - ./observability/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+
+    # Not exposed to host. Reachable from other containers as http://loki:3100
+    restart: unless-stopped
+
+
+  # ─── Promtail (log collector) ───────────────────────────────────────────────
+  # Discovers containers via the Docker socket, ships their stdout/stderr
+  # to Loki with rich labels (compose_service, container, image, etc.).
+  promtail:
+    image: grafana/promtail:3.6.11
+    container_name: voicepolish-promtail
+
+    command: -config.file=/etc/promtail/promtail-config.yml
+
+    volumes:
+      - ./observability/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      # docker.sock — Promtail uses this for service discovery.
+      # Mount read-only to limit blast radius if the container is compromised.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    depends_on:
+      - loki
+
+    restart: unless-stopped
+
+
+  # ─── Grafana (dashboards + alerts) ──────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:13.0.1
+    container_name: voicepolish-grafana
+
+    ports:
+      - "3000:3000"
+
+    environment:
+      GF_SECURITY_ADMIN_USER: "admin"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-changeme}"
+      # Disable anonymous access, telemetry, and the help/news panels for cleanliness.
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+
+    volumes:
+      # Provisioning: declare Loki as a datasource on first boot.
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Persist dashboards/users/etc. across `docker compose down`.
+      - grafana_data:/var/lib/grafana
+
+    depends_on:
+      - loki
 
     restart: unless-stopped
 
 
 # ─── Named volumes ─────────────────────────────────────────────────────────────
 volumes:
-  voicepolish_data:                # SQLite database file, persists across
-                                   # container restarts. Wipe with
-                                   # `docker compose down -v`.
+  voicepolish_data:    # SQLite database
+  loki_data:           # Loki chunks + index
+  grafana_data:        # Grafana dashboards + user config
