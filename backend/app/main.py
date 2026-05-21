@@ -15,9 +15,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import os
 
+from app.core.logging_config import configure_logging
 from app.database import engine, Base
 from app import models  # noqa: F401  -- import needed so Base knows about the models
 from app.routers import transcriptions, vocabulary, polish, transcribe
+
+
+# -----------------------------------------------------------------------------
+# Configure logging FIRST — before any other module starts emitting log lines.
+# Produces JSON-structured logs on stdout so Promtail/Loki can ingest them
+# as machine-parseable events.
+# -----------------------------------------------------------------------------
+configure_logging()
 
 
 # -----------------------------------------------------------------------------

@@ -14,6 +14,7 @@ Why OpenAI Whisper (vs browser Web Speech API):
 
 import io
 import logging
+import time
 
 from openai import OpenAI
 
@@ -72,6 +73,9 @@ def transcribe_audio(
     audio_file = io.BytesIO(audio_bytes)
     audio_file.name = filename
 
+    # Time the call so we can chart LLM latency in Grafana.
+    start = time.monotonic()
+
     try:
         # Build the request kwargs. We only pass `language` if it's set,
         # so the API can auto-detect when we don't know.
@@ -91,10 +95,41 @@ def transcribe_audio(
         # When response_format="text", the SDK returns a string directly.
         # For "json" or "verbose_json" it would return a structured object.
         text = response if isinstance(response, str) else getattr(response, "text", "")
-        return text.strip()
+        text = text.strip()
+
+        # Structured success log — same schema as polish_service for uniform dashboards.
+        logger.info(
+            "ai_api.call",
+            extra={
+                "event": "ai_api.call",
+                "provider_type": "speech_to_text",
+                "provider": "openai",
+                "model": "whisper-1",
+                "mode": "transcribe",
+                "status": "success",
+                "duration_ms": int((time.monotonic() - start) * 1000),
+                "audio_bytes": len(audio_bytes),
+                "output_chars": len(text),
+                "language": language,
+            },
+        )
+        return text
 
     except Exception as e:
-        # Wrap any SDK / network error into our standard RuntimeError so the
-        # router layer can convert it to a clean HTTP response.
-        logger.error("Whisper transcription failed: %s", e)
+        # Structured failure log — same schema as polish_service.
+        logger.error(
+            "ai_api.call",
+            extra={
+                "event": "ai_api.call",
+                "provider_type": "speech_to_text",
+                "provider": "openai",
+                "model": "whisper-1",
+                "mode": "transcribe",
+                "status": "error",
+                "duration_ms": int((time.monotonic() - start) * 1000),
+                "audio_bytes": len(audio_bytes),
+                "error_type": type(e).__name__,
+                "error_message": str(e)[:500],
+            },
+        )
         raise RuntimeError(f"Whisper API call failed: {e}") from e

@@ -15,7 +15,13 @@ Why this lives outside the router:
 
 from anthropic import Anthropic
 
+import logging
+import time
+
 from app.core.config import require_anthropic_key, DEFAULT_ANTHROPIC_MODEL
+
+
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------------------------------------------------------
@@ -100,19 +106,63 @@ def polish_text(
     client = _get_client()
     chosen_model = model or DEFAULT_ANTHROPIC_MODEL
 
-    # Anthropic Messages API call.
-    # `system` carries the instructions; `messages` carries the user content.
-    # max_tokens caps the reply length so a runaway model can't burn budget.
-    response = client.messages.create(
-        model=chosen_model,
-        max_tokens=1024,
-        system=system_prompt,
-        messages=[
-            {"role": "user", "content": raw_text}
-        ],
-    )
+    # Time the call so we can chart LLM latency in Grafana.
+    start = time.monotonic()
+
+    try:
+        # Anthropic Messages API call.
+        # `system` carries the instructions; `messages` carries the user content.
+        # max_tokens caps the reply length so a runaway model can't burn budget.
+        response = client.messages.create(
+            model=chosen_model,
+            max_tokens=1024,
+            system=system_prompt,
+            messages=[
+                {"role": "user", "content": raw_text}
+            ],
+        )
+    except Exception as e:
+        # Structured failure log — enables Loki/Grafana to compute error rate.
+        logger.error(
+            "ai_api.call",
+            extra={
+                "event": "ai_api.call",
+                "provider_type": "llm",
+                "provider": "anthropic",
+                "model": chosen_model,
+                "mode": mode,
+                "status": "error",
+                "duration_ms": int((time.monotonic() - start) * 1000),
+                "error_type": type(e).__name__,
+                "error_message": str(e)[:500],  # truncate to keep log size bounded
+            },
+        )
+        raise RuntimeError(f"Anthropic API call failed: {e}") from e
+
+    duration_ms = int((time.monotonic() - start) * 1000)
 
     # response.content is a list of content blocks. For a plain text reply
     # there's one TextBlock. We concatenate any text blocks defensively.
     text_parts = [block.text for block in response.content if hasattr(block, "text")]
-    return "".join(text_parts).strip()
+    polished = "".join(text_parts).strip()
+
+    # Structured success log — enables Loki/Grafana to count calls + chart latency.
+    # Token counts come from Anthropic's response usage block; helps cost dashboards.
+    usage = getattr(response, "usage", None)
+    logger.info(
+        "ai_api.call",
+        extra={
+            "event": "ai_api.call",
+            "provider_type": "llm",
+            "provider": "anthropic",
+            "model": chosen_model,
+            "mode": mode,
+            "status": "success",
+            "duration_ms": duration_ms,
+            "input_tokens": getattr(usage, "input_tokens", None) if usage else None,
+            "output_tokens": getattr(usage, "output_tokens", None) if usage else None,
+            "output_chars": len(polished),
+        },
+    )
+
+    return polished
