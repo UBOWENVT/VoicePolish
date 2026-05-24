@@ -196,11 +196,6 @@ The SQLite database lives in a named volume (`voicepolish_data`) mounted at
 `/data/voicepolish.db` inside the container — same path Railway uses in
 production, so the local stack exercises the same code path.
 
-**Note on `depends_on`:** Compose starts the backend container before nginx,
-but doesn't wait for FastAPI to finish booting. On the first request after
-`up`, you may see a brief 502 from nginx if the backend is still loading
-NLTK data. Refresh after a few seconds.
-
 ### Path B — Bare uvicorn (faster iteration on backend code)
 
 Skip Docker for tight inner loops where you're editing backend code and want
